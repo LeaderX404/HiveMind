@@ -3,6 +3,7 @@ transformers>=4.30.0
 sentencepiece
 accelerate
 bitsandbytes
+safetensors
 grpcio
 grpcio-tools
 protobuf
