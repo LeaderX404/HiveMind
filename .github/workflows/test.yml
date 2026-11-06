@@ -15,7 +15,9 @@ jobs:
       # leg failure must not hide the state of the others.
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
+        # Python 3.8 dropped together with the torch>=2.6.0 floor:
+        # torch 2.6.0 provides no 3.8 wheels.
+        python-version: ["3.9", "3.10", "3.11"]
     
     steps:
     - name: Checkout repository
@@ -103,16 +105,16 @@ jobs:
     
     - name: Run mypy
       run: |
-        mypy hivemind/ --ignore-missing-imports --python-version 3.8
+        mypy hivemind/ --ignore-missing-imports --python-version 3.9
 
   security:
     name: Security Audit (advisory)
     runs-on: ubuntu-latest
     # Known-vulnerable dependencies must be visible, not invisible:
     # the job reports findings without blocking merges. Fix findings
-    # by raising version floors in requirements.txt (note: Python 3.8
-    # caps torch at 2.4.1, which cannot receive the CVE-2025-32434 /
-    # PYSEC-2026-2286 fixes - dropping 3.8 is the structural fix).
+    # by raising version floors in requirements.txt. The torch floor
+    # is >=2.6.0 (CVE-2025-32434 fixed upstream in 2.6.0), which also
+    # means Python 3.8 is no longer supported.
     continue-on-error: true
     
     steps:
