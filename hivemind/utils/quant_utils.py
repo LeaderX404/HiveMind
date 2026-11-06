@@ -1,6 +1,7 @@
 """
 Quantization Utilities for Out-of-Core Inference
-Supports Q4 and Q8 quantization for memory efficiency and speed.
+Supports Q2, Q4 and Q8 quantization for memory efficiency and speed.
+Phase 3: 2-bit quantization unlocks 50B-100B models on single devices.
 """
 import torch
 import torch.nn.functional as F
@@ -21,11 +22,11 @@ class QuantizationConfig:
         Initialize quantization configuration.
         
         Args:
-            bits: Quantization bits (4 or 8)
+            bits: Quantization bits (2, 4 or 8)
             symmetric: Use symmetric quantization
             group_size: Group size for per-group quantization
         """
-        assert bits in [4, 8], f"Only 4 and 8 bit quantization supported, got {bits}"
+        assert bits in [2, 4, 8], f"Only 2, 4 and 8 bit quantization supported, got {bits}"
         self.bits = bits
         self.symmetric = symmetric
         self.group_size = group_size
@@ -46,6 +47,8 @@ def quantize_tensor(tensor: torch.Tensor,
         return _quantize_q8(tensor, config)
     elif config.bits == 4:
         return _quantize_q4(tensor, config)
+    elif config.bits == 2:
+        return _quantize_q2(tensor, config)
     else:
         raise ValueError(f"Unsupported quantization bits: {config.bits}")
 
@@ -77,6 +80,8 @@ def dequantize_tensor(quantized: torch.Tensor,
         dequantized = _dequantize_q8(quantized, scales, zeros, config)
     elif config.bits == 4:
         dequantized = _dequantize_q4(quantized, scales, zeros, config)
+    elif config.bits == 2:
+        dequantized = _dequantize_q2(quantized, scales, zeros, config)
     else:
         raise ValueError(f"Unsupported quantization bits: {config.bits}")
     
@@ -269,6 +274,114 @@ def _dequantize_q4(quantized: torch.Tensor,
     # Concatenate all groups
     dequantized = torch.cat(dequantized_groups)
     
+    return dequantized
+
+
+def _quantize_q2(
+    tensor: torch.Tensor,
+    config: QuantizationConfig,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Quantize to 2-bit with per-group quantization (Phase 3)
+
+    Four 2-bit codes (values 0-3) are packed into a single byte:
+        byte = (v0 << 6) | (v1 << 4) | (v2 << 2) | v3
+    """
+    # Store original element count
+    original_numel = tensor.numel()
+
+    # Flatten
+    tensor_flat = tensor.reshape(-1)
+
+    # Calculate number of groups
+    num_groups = (original_numel + config.group_size - 1) // config.group_size
+    padded_size = num_groups * config.group_size
+
+    # Pad if needed
+    if original_numel < padded_size:
+        padding = torch.zeros(padded_size - original_numel, dtype=tensor.dtype, device=tensor.device)
+        tensor_flat = torch.cat([tensor_flat, padding])
+
+    # Reshape to groups
+    tensor_groups = tensor_flat.reshape(num_groups, config.group_size)
+
+    # Quantize each group to 2-bit (asymmetric: 4 levels across the group range)
+    all_quantized_values = []
+    scales_list = []
+    mins_list = []
+
+    for i in range(num_groups):
+        group = tensor_groups[i]
+        min_val = group.min()
+        max_val = group.max()
+        scale = (max_val - min_val) / 3.0
+        if scale == 0:
+            # Constant group: code 0 maps back to min_val on dequantization
+            scale = torch.tensor(1.0, device=tensor.device)
+        quantized = ((group - min_val) / scale).round().clamp(0, 3).to(torch.uint8)
+
+        all_quantized_values.extend(quantized.tolist())
+        scales_list.append(scale)
+        mins_list.append(min_val)
+
+    # Pack four 2-bit values into one byte
+    quantized_packed = []
+    for i in range(0, len(all_quantized_values), 4):
+        byte = all_quantized_values[i] << 6
+        if i + 1 < len(all_quantized_values):
+            byte |= all_quantized_values[i + 1] << 4
+        if i + 2 < len(all_quantized_values):
+            byte |= all_quantized_values[i + 2] << 2
+        if i + 3 < len(all_quantized_values):
+            byte |= all_quantized_values[i + 3]
+        quantized_packed.append(byte)
+
+    quantized = torch.tensor(quantized_packed, dtype=torch.uint8, device=tensor.device)
+    scales = torch.stack(scales_list).to(config.scale_dtype)
+    mins = torch.stack(mins_list).to(config.scale_dtype)
+
+    return quantized, scales, mins
+
+
+def _dequantize_q2(
+    quantized: torch.Tensor,
+    scales: torch.Tensor,
+    mins: torch.Tensor,
+    config: QuantizationConfig,
+) -> torch.Tensor:
+    """Dequantize from 2-bit"""
+    num_groups = scales.numel()
+    expected_size = num_groups * config.group_size
+
+    # Unpack four 2-bit values per byte
+    unpacked_values = []
+    for byte in quantized:
+        unpacked_values.append((byte >> 6) & 0x03)
+        unpacked_values.append((byte >> 4) & 0x03)
+        unpacked_values.append((byte >> 2) & 0x03)
+        unpacked_values.append(byte & 0x03)
+
+    # Pad the code stream if the byte stream is shorter than the groups require
+    if len(unpacked_values) < expected_size:
+        unpacked_values.extend([0] * (expected_size - len(unpacked_values)))
+
+    unpacked = torch.tensor(unpacked_values, dtype=torch.uint8, device=quantized.device)
+
+    # Reshape to groups
+    unpacked_groups = unpacked.reshape(num_groups, config.group_size)
+
+    # Dequantize each group
+    dequantized_groups = []
+
+    for i in range(num_groups):
+        group_quant = unpacked_groups[i]
+        scale = scales[i]
+        min_val = mins[i]
+        dequantized = (group_quant.float() * scale + min_val).to(torch.float16)
+        dequantized_groups.append(dequantized)
+
+    # Concatenate all groups
+    dequantized = torch.cat(dequantized_groups)
+
     return dequantized
 
 

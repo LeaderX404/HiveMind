@@ -2,9 +2,9 @@ import grpc
 import torch
 import zlib
 import time
-import os
 from typing import Optional
 from hivemind.net.proto import inference_pb2, inference_pb2_grpc
+from hivemind.net.serialization import serialize_tensor, deserialize_tensor
 from hivemind.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,13 +20,15 @@ class CompressionType:
 class InferenceClient:
     """
     gRPC client for inference requests
-    Supports compression, retries, and connection pooling
+    Supports compression, retries, TLS and token authentication
     """
     
     def __init__(self, server_address: str = "localhost:50051", 
                  compression: int = CompressionType.ZLIB,
                  max_retries: int = 3,
-                 timeout: float = 30.0):
+                 timeout: float = 30.0,
+                 auth_token: Optional[str] = None,
+                 root_certificates: Optional[str] = None):
         """
         Initialize the inference client
         
@@ -35,11 +37,18 @@ class InferenceClient:
             compression: Compression type (0=None, 1=GZIP, 2=ZLIB)
             max_retries: Maximum number of retries for failed requests
             timeout: Timeout for requests in seconds
+            auth_token: Shared secret sent in the x-hivemind-token
+                metadata header on every request
+            root_certificates: Path to the PEM bundle of trusted CA
+                certificates. When provided, the client connects over
+                TLS via grpc.secure_channel.
         """
         self.server_address = server_address
         self.compression = compression
         self.max_retries = max_retries
         self.timeout = timeout
+        self.auth_token = auth_token
+        self.root_certificates = root_certificates
         self.channel = None
         self.stub = None
         self._connect()
@@ -48,19 +57,29 @@ class InferenceClient:
 
     def _connect(self):
         """Establish connection to server"""
+        options = [
+            ('grpc.max_send_message_length', 100 * 1024 * 1024),  # 100MB
+            ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100MB
+            ('grpc.keepalive_time_ms', 10000),  # 10 seconds
+            ('grpc.keepalive_timeout_ms', 5000),  # 5 seconds
+        ]
         try:
-            # Create channel with options
-            self.channel = grpc.insecure_channel(
-                self.server_address,
-                options=[
-                    ('grpc.max_send_message_length', 100 * 1024 * 1024),  # 100MB
-                    ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100MB
-                    ('grpc.keepalive_time_ms', 10000),  # 10 seconds
-                    ('grpc.keepalive_timeout_ms', 5000),  # 5 seconds
-                ]
-            )
+            if self.root_certificates:
+                # TLS: trust anchors come from the provided CA bundle.
+                with open(self.root_certificates, "rb") as f:
+                    ca_pem = f.read()
+                credentials = grpc.ssl_channel_credentials(root_certificates=ca_pem)
+                self.channel = grpc.secure_channel(self.server_address, credentials, options=options)
+                logger.info(f"Connected to {self.server_address} over TLS")
+            else:
+                # No CA bundle configured: plain-text channel. This is
+                # only acceptable on trusted networks; warn loudly.
+                logger.warning(
+                    "Connecting WITHOUT TLS (no root_certificates set): "
+                    "traffic is unencrypted and open to interception"
+                )
+                self.channel = grpc.insecure_channel(self.server_address, options=options)
             self.stub = inference_pb2_grpc.InferenceServiceStub(self.channel)
-            logger.info(f"Connected to {self.server_address}")
         except Exception as e:
             logger.error(f"Failed to connect to {self.server_address}: {e}")
             raise
@@ -86,6 +105,12 @@ class InferenceClient:
             import gzip
             return gzip.decompress(data)
         return data
+
+    def _auth_metadata(self):
+        """Metadata headers sent with every request."""
+        if self.auth_token:
+            return (("x-hivemind-token", self.auth_token),)
+        return None
 
     def _retry_request(self, func, *args, **kwargs):
         """Retry a request with exponential backoff"""
@@ -119,15 +144,9 @@ class InferenceClient:
         Returns:
             Output tensor from the shard
         """
-        # Save input tensor to bytes
-        input_path = "input_tensor.pt"
-        torch.save(input_tensor, input_path)
-        
-        with open(input_path, "rb") as f:
-            input_bytes = f.read()
-        
-        # Compress input
-        compressed_input = self._compress(input_bytes)
+        # Pack the tensor with the safe container format: no
+        # torch.save/pickle anywhere on the wire, in either direction.
+        compressed_input = self._compress(serialize_tensor(input_tensor))
         
         # Create request
         request = inference_pb2.InferenceRequest(
@@ -136,11 +155,12 @@ class InferenceClient:
             shard_index=shard_index
         )
         
-        # Send request with retry
+        # Send request with retry (auth token travels as metadata)
         def make_request():
             return self.stub.ProcessShard(
                 request,
-                timeout=self.timeout
+                timeout=self.timeout,
+                metadata=self._auth_metadata(),
             )
         
         response = self._retry_request(make_request)
@@ -149,19 +169,9 @@ class InferenceClient:
         if response.error:
             raise RuntimeError(f"Server error (shard {response.shard_index}): {response.error}")
         
-        # Decompress and load output
-        output_bytes = self._decompress(response.output_data)
-        output_path = "output_tensor.pt"
-        with open(output_path, "wb") as f:
-            f.write(output_bytes)
-        
-        output_tensor = torch.load(output_path)
-        
-        # Cleanup
-        if os.path.exists(input_path):
-            os.remove(input_path)
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        # Decompress and rebuild the output tensor (safe container
+        # format: bytes are only read, never executed)
+        output_tensor = deserialize_tensor(self._decompress(response.output_data))
         
         logger.debug(f"Processed shard {response.shard_index} successfully")
         return output_tensor
@@ -170,7 +180,9 @@ class InferenceClient:
         """Get server statistics"""
         try:
             request = inference_pb2.StatsRequest()
-            response = self.stub.GetStats(request, timeout=5.0)
+            response = self.stub.GetStats(
+                request, timeout=5.0, metadata=self._auth_metadata()
+            )
             return {
                 "request_count": response.request_count,
                 "error_count": response.error_count,

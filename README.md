@@ -12,7 +12,8 @@
 - **No Full Model Loading**: Never loads the entire model into RAM at once
 - **Direct File Access**: Reads tensors directly from GGUF/Safetensors files on demand
 - **Complete Transformer Support**: Full forward pass with RoPE, RMSNorm, Causal Mask, KV Cache, GQA
-- **Quantization Support**: Q4 and Q8 quantization for memory efficiency (2x-4x compression)
+- **Quantization Support**: Q2, Q4 and Q8 quantization for memory efficiency (2x-16x compression)
+- **50B-100B Model Support**: Reference presets (50b/70b/100b) and 4000MB adaptive pages for huge models (Phase 3)
 - **Tensor Caching**: LRU cache for loaded tensors to avoid repeated file reads
 - **Performance Monitoring**: Track RAM usage, GPU usage, tokens/sec, and loading times
 - **Model Agnostic**: Works with Llama, Mistral, Qwen, Phi-2, and other transformer models
@@ -157,11 +158,13 @@ response = engine.generate("Explain AI in simple terms", max_new_tokens=50)
 
 ### Memory Requirements
 
-| Model Size | FP16 | Q8 | Q4 |
-|------------|------|----|----|
-| 1B | ~2GB | ~1GB | ~500MB |
-| 7B | ~14GB | ~7GB | ~3.5GB |
-| 13B | ~26GB | ~13GB | ~6.5GB |
+| Model Size | FP16 | Q8 | Q4 | Q2 |
+|------------|------|----|----|----|
+| 1B | ~2GB | ~1GB | ~500MB | ~250MB |
+| 7B | ~14GB | ~7GB | ~3.5GB | ~1.8GB |
+| 13B | ~26GB | ~13GB | ~6.5GB | ~3.3GB |
+| 70B | ~140GB | ~70GB | ~35GB | ~18GB |
+| 100B | ~200GB | ~100GB | ~50GB | ~25GB |
 
 ### Speed Estimates (with NVMe SSD)
 
@@ -187,7 +190,7 @@ config = TransformerConfig(
     head_dim=128,            # Head dimension
     rope_theta=500000.0,     # RoPE theta parameter
     use_rms_norm=True,       # Use RMSNorm (for Llama/Mistral)
-    quant_bits=None          # Quantization bits (4 or 8)
+    quant_bits=None          # Quantization bits (2, 4 or 8)
 )
 ```
 
@@ -202,7 +205,11 @@ python -m examples.test_out_of_core
 # Quantization tests
 python -m examples.test_quantization
 
-# Unit tests
+# Phase 3 tests (Q2 + 50B-100B models)
+python -m examples.test_phase3
+
+# Unit tests (incl. Q2 suite)
+pytest tests/unit/test_quantization_q2.py
 pytest tests/unit/
 ```
 

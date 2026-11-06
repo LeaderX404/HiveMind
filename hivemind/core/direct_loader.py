@@ -4,6 +4,7 @@ Loads model tensors directly from GGUF/Safetensors files WITHOUT loading full mo
 This is the TRUE out-of-core solution.
 Supports Q4 and Q8 quantization for memory efficiency.
 """
+import hashlib
 import torch
 import numpy as np
 from pathlib import Path
@@ -25,7 +26,8 @@ class DirectFileModelLoader:
                  model_path: str,
                  device: str = "cpu",
                  use_mmap: bool = True,
-                 quant_bits: Optional[int] = None):
+                 quant_bits: Optional[int] = None,
+                 expected_sha256: Optional[str] = None):
         """
         Initialize direct file model loader.
         
@@ -34,11 +36,20 @@ class DirectFileModelLoader:
             device: Device to use (cpu or cuda)
             use_mmap: Use memory-mapped loading if available
             quant_bits: Quantization bits (4 or 8). If None, no quantization.
+            expected_sha256: Optional SHA-256 hex digest the file must
+                match before anything is parsed or loaded. Protects
+                against tampered or swapped model files.
         """
         self.model_path = Path(model_path)
         self.device = device
         self.use_mmap = use_mmap
         self.quant_bits = quant_bits
+        
+        # Integrity gate: must pass BEFORE the file is parsed or any
+        # tensor is loaded, so a tampered file is rejected up front.
+        if expected_sha256 is not None:
+            self._verify_sha256(expected_sha256)
+        
         self.model_info = self._load_model_info()
         self.tensor_infos = self._extract_tensor_infos()
         
@@ -54,6 +65,20 @@ class DirectFileModelLoader:
         logger.info(f"  Tensors: {len(self.tensor_infos)}")
         logger.info(f"  MMAP: {'enabled' if use_mmap else 'disabled'}")
         logger.info(f"  Quantization: {quant_bits}-bit" if quant_bits else "  Quantization: disabled")
+    
+    def _verify_sha256(self, expected: str) -> None:
+        """Stream the file through SHA-256 and compare with the expected digest."""
+        sha256 = hashlib.sha256()
+        with open(self.model_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                sha256.update(chunk)
+        actual = sha256.hexdigest()
+        if actual.lower() != expected.lower():
+            raise ValueError(
+                f"Model file integrity check FAILED for {self.model_path}: "
+                f"sha256 mismatch (expected {expected.lower()}, got {actual})"
+            )
+        logger.info("Model file integrity verified (sha256 match)")
     
     def _load_model_info(self) -> Dict[str, Any]:
         """Load model metadata without loading weights"""

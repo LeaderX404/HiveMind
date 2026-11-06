@@ -2,6 +2,7 @@
 File-Backed Pager for Out-of-Core Inference
 Reads tensors directly from GGUF/Safetensors files on demand with caching.
 Phase 2: Added prefetching for 10B+ models
+Phase 3: Added adaptive 4000MB pages for 50B-100B models
 """
 import torch
 import threading
@@ -11,6 +12,22 @@ from hivemind.utils.logger import get_logger
 from hivemind.core.direct_loader import DirectFileModelLoader
 
 logger = get_logger(__name__)
+
+
+def compute_optimal_page_size_mb(total_size_mb: float, current_page_size_mb: int) -> int:
+    """Return the recommended page size (MB) for a model of a given on-disk size.
+
+    Phase 2: 5GB+ -> 1000MB pages, 20GB+ (10B params) -> 2000MB pages.
+    Phase 3: 100GB+ (50B-100B params) -> 4000MB pages for smoother prefetching.
+    The current page size is never lowered.
+    """
+    if total_size_mb > 100000:  # 100GB+ on disk (50B+ parameters in FP16)
+        return max(current_page_size_mb, 4000)
+    if total_size_mb > 20000:  # 20GB+ on disk (10B+ parameters)
+        return max(current_page_size_mb, 2000)
+    if total_size_mb > 5000:  # 5GB+ on disk (5B+ parameters)
+        return max(current_page_size_mb, 1000)
+    return current_page_size_mb
 
 
 class FileBackedPager:
@@ -106,27 +123,23 @@ class FileBackedPager:
         return self.tensor_to_page.get(tensor_name, 0)
     
     def _optimize_page_size_for_10b(self):
-        """Optimize page size based on model size (Phase 2 feature)"""
+        """Optimize page size based on model size (Phase 2, extended in Phase 3)"""
         # Estimate model size
         total_size_mb = sum(
             self.loader.get_tensor_info(tensor_name)['size'] / (1024 * 1024)
             for tensor_name in self.loader.list_tensors()
         )
         
-        # For 10B+ models, use larger pages for better prefetching
-        if total_size_mb > 20000:  # 20GB+ (10B+ parameters)
-            if self.page_size_mb < 2000:
-                logger.info(f"Optimized page size from {self.page_size_mb}MB to 2000MB for large model")
-                self.page_size_mb = 2000
-                # Recreate pages with new size
-                self.pages = self._create_pages()
-                self.tensor_to_page = self._map_tensors_to_pages()
-        elif total_size_mb > 5000:  # 5B+ parameters
-            if self.page_size_mb < 1000:
-                logger.info(f"Optimized page size from {self.page_size_mb}MB to 1000MB for medium model")
-                self.page_size_mb = 1000
-                self.pages = self._create_pages()
-                self.tensor_to_page = self._map_tensors_to_pages()
+        # Pick the best tier for this model size (Phase 3: 50B-100B supported)
+        optimal_page_size_mb = compute_optimal_page_size_mb(total_size_mb, self.page_size_mb)
+        if optimal_page_size_mb > self.page_size_mb:
+            logger.info(
+                f"Optimized page size from {self.page_size_mb}MB to {optimal_page_size_mb}MB for large model"
+            )
+            self.page_size_mb = optimal_page_size_mb
+            # Recreate pages with new size
+            self.pages = self._create_pages()
+            self.tensor_to_page = self._map_tensors_to_pages()
     
     def get_page_tensors(self, page_index: int) -> List[str]:
         """Get tensor names for a page"""
