@@ -139,7 +139,7 @@ jobs:
                     continue
                 for pattern, label in PATTERNS:
                     if not re.search(pattern, line):
-                    continue
+                        continue
                     m = MARKER.search(line)
                     if not m:
                         errors.append(
