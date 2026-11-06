@@ -68,6 +68,62 @@ jobs:
         flags: unittests
         name: codecov-umbrella
 
+  guard:
+    name: Serialization Guard
+    runs-on: ubuntu-latest
+    # Blocking: unsafe deserialization must never come back. This
+    # guard is also the documented answer to the PYSEC-2026-2286
+    # pip-audit finding: the vulnerable surface (torch.load and
+    # pickle on any path) is structurally absent from the codebase
+    # and this job keeps it that way.
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+    
+    - name: Block unsafe deserialization calls
+      run: |
+        python - <<'EOF'
+        import pathlib
+        import re
+        import sys
+
+        PATTERNS = [
+            (r"torch\.load\s*\(", "torch.load"),
+            (r"pickle\.load\s*\(", "pickle.load"),
+            (r"pickle\.loads\s*\(", "pickle.loads"),
+            (r"pickle\.Unpickler", "pickle.Unpickler"),
+            (r"yaml\.load\s*\(", "yaml.load (use yaml.safe_load)"),
+        ]
+        MARKER = "serialization-guard: allowed"
+
+        offenders = []
+        for root in (pathlib.Path("hivemind"), pathlib.Path("tests")):
+            for path in root.rglob("*.py"):
+                for lineno, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), 1
+                ):
+                    stripped = line.strip()
+                    if stripped.startswith("#"):
+                        continue
+                    if MARKER in line:
+                        continue
+                    for pattern, label in PATTERNS:
+                        if re.search(pattern, line):
+                            offenders.append(
+                                f"{path}:{lineno}: {label}: {stripped}"
+                            )
+
+        if offenders:
+            print("\n".join(offenders))
+            print(
+                "\nUnsafe deserialization is forbidden. If this call is "
+                "an audited, documented exception, add the inline "
+                "marker: serialization-guard: allowed"
+            )
+            sys.exit(1)
+        print("Serialization Guard: clean (no torch.load/pickle/yaml.load in sources)")
+        EOF
+
   lint:
     name: Lint Code (advisory)
     runs-on: ubuntu-latest
@@ -114,7 +170,10 @@ jobs:
     # the job reports findings without blocking merges. Fix findings
     # by raising version floors in requirements.txt. The torch floor
     # is >=2.6.0 (CVE-2025-32434 fixed upstream in 2.6.0), which also
-    # means Python 3.8 is no longer supported.
+    # means Python 3.8 is no longer supported. PYSEC-2026-2286
+    # (torch <2.10) is documented as structurally mitigated: the
+    # unsafe surface is absent from the codebase and the blocking
+    # Serialization Guard job keeps it that way.
     continue-on-error: true
     
     steps:
@@ -190,7 +249,7 @@ jobs:
 
   release:
     name: Release Package
-    needs: [test, lint, build]
+    needs: [test, guard, lint, build]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     
