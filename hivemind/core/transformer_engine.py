@@ -1,8 +1,9 @@
 """
 Paged Transformer Engine for Out-of-Core Inference
 Implements full transformer forward pass with paging.
-Supports: RoPE, RMSNorm, Causal Mask, KV Cache, GQA, Q4/Q8 Quantization
+Supports: RoPE, RMSNorm, Causal Mask, KV Cache, GQA, Q2/Q4/Q8 Quantization
 Phase 2: Added batch processing for 10B+ models
+Phase 3: Added Q2 quantization and 50B-100B model presets
 """
 import math
 import torch
@@ -12,6 +13,44 @@ from hivemind.utils.logger import get_logger
 from hivemind.utils.quant_utils import QuantizationConfig, dequantize_tensor
 
 logger = get_logger(__name__)
+
+
+# Phase 3: reference configurations for 50B-100B class models.
+# Values follow the Llama-2-70B scaling family; treat them as starting
+# points, not exact descriptions of any specific checkpoint.
+LARGE_MODEL_PRESETS = {
+    "50b": {
+        "model_type": "llama",
+        "hidden_size": 8192,
+        "num_layers": 64,
+        "num_attention_heads": 64,
+        "num_key_value_heads": 8,
+        "vocab_size": 32000,
+        "max_position_embeddings": 32768,
+        "rope_theta": 500000.0,
+    },
+    "70b": {
+        "model_type": "llama",
+        "hidden_size": 8192,
+        "num_layers": 80,
+        "num_attention_heads": 64,
+        "num_key_value_heads": 8,
+        "vocab_size": 32000,
+        "max_position_embeddings": 32768,
+        "rope_theta": 500000.0,
+    },
+    "100b": {
+        "model_type": "llama",
+        "hidden_size": 10240,
+        "num_layers": 100,
+        "num_attention_heads": 80,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 32000,
+        "max_position_embeddings": 32768,
+        "rope_theta": 500000.0,
+    },
+}
 
 
 class TransformerConfig:
@@ -88,6 +127,24 @@ class TransformerConfig:
             tie_word_embeddings=bool(get("tie_word_embeddings", False)),
         )
 
+    @classmethod
+    def from_preset(cls, name: str, quant_bits: Optional[int] = None) -> "TransformerConfig":
+        """Build a TransformerConfig from a named large-model preset (Phase 3).
+
+        Presets are reference configurations for 50B-100B class models,
+        not exact descriptions of any specific checkpoint.
+
+        Args:
+            name: Preset name ("50b", "70b" or "100b")
+            quant_bits: Optional quantization bits (2, 4 or 8)
+        """
+        key = name.lower()
+        if key not in LARGE_MODEL_PRESETS:
+            raise ValueError(
+                f"Unknown preset: {name!r}. Available: {sorted(LARGE_MODEL_PRESETS)}"
+            )
+        return cls(quant_bits=quant_bits, **LARGE_MODEL_PRESETS[key])
+
 
 class LayerConfig:
     """Configuration for a single transformer layer"""
@@ -114,7 +171,7 @@ class PagedTransformerEngine:
     - Feed-forward networks
     - Residual connections
     - GQA (Grouped Query Attention) support
-    - Q4/Q8 Quantization support
+    - Q2/Q4/Q8 Quantization support (on-the-fly weight dequantization)
     """
     
     def __init__(self,
@@ -194,6 +251,37 @@ class PagedTransformerEngine:
         self.tensor_cache[tensor_name] = tensor
         return tensor
     
+    def _quantized_linear(self, x: torch.Tensor, tensor_name: str) -> torch.Tensor:
+        """Linear layer with on-the-fly dequantization of a packed weight (Phase 3).
+
+        The quantized payload is stored under "tensor_name", with companion
+        tensors "tensor_name_scales", "tensor_name_zeros", "tensor_name_shape"
+        and "tensor_name_numel" (see quantize_model_state_dict).
+        """
+        quantized = self._load_tensor(tensor_name)
+        scales = self._load_tensor(tensor_name + "_scales")
+        zeros = self._load_tensor(tensor_name + "_zeros")
+
+        # Metadata tensors are optional; dequantize_tensor falls back to
+        # inferring the layout when they are absent.
+        output_shape = None
+        original_numel = None
+        try:
+            output_shape = tuple(self._load_tensor(tensor_name + "_shape").tolist())
+            original_numel = int(self._load_tensor(tensor_name + "_numel").item())
+        except (KeyError, ValueError):
+            pass
+
+        weight = dequantize_tensor(
+            quantized,
+            scales,
+            zeros,
+            self.config.quant_config,
+            output_shape,
+            original_numel,
+        )
+        return F.linear(x, weight.to(x.dtype))
+
     def _apply_rope(self, x: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
         """Apply Rotary Position Embedding (RoPE)"""
         # x shape: [batch, num_heads, seq_len, head_dim]
