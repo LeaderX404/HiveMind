@@ -90,6 +90,10 @@ jobs:
       run: |
         python -m py_compile benchmark.py
     
+    - name: Verify pre-registered covenant seal
+      run: |
+        sha256sum -c seal/THRESHOLDS.sha256
+    
     - name: Block unsafe deserialization; validate exception markers
       run: |
         python - <<'EOF'
