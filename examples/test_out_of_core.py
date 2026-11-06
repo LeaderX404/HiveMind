@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Test script for Out-of-Core Inference
-Demonstrates HiveMind v2.1 true out-of-core inference
+Demonstrates HiveMind by VALCRYPTIA - Out-of-Core Inference Engine for LLMs
 """
 import torch
 from hivemind.core.direct_loader import DirectFileModelLoader
@@ -87,19 +87,19 @@ def test_rope():
 
 def main():
     """Run all tests"""
-    print("=" * 60)
-    print("HiveMind v2.1: Out-of-Core Inference Test Suite")
-    print("=" * 60)
+    print("=" * 70)
+    print("HiveMind by VALCRYPTIA: Out-of-Core Inference Test Suite")
+    print("=" * 70)
     
     test_imports()
     test_config()
     test_performance_monitor()
     test_rope()
     
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 70)
     print("✅ All tests passed!")
-    print("=" * 60)
-    print("\nHiveMind v2.1 is ready for:")
+    print("=" * 70)
+    print("\nHiveMind by VALCRYPTIA is ready for:")
     print("  • True out-of-core inference")
     print("  • RoPE (Rotary Position Embedding)")
     print("  • RMSNorm support")
@@ -110,6 +110,7 @@ def main():
     print("  • Performance monitoring")
     print("\nTo test with actual model files:")
     print("  python examples/test_out_of_core.py --model-path <path-to-model.safetensors>")
+    print("\nBuilt with ❤️ by VALCRYPTIA")
 
 
 if __name__ == "__main__":

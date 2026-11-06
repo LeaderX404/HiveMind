@@ -1,25 +1,28 @@
-# HiveMind: Neural Swarm Inference for LLMs on Low-End Devices
+# HiveMind by VALCRYPTIA
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyPI](https://img.shields.io/badge/PyPI-coming_soon-orange.svg)]()
+[![By VALCRYPTIA](https://img.shields.io/badge/By-VALCRYPTIA-0078d7.svg)](https://github.com/LeaderX404/HiveMind)
 
-**Run 7B+ Large Language Models on low-end devices using Neural Swarm Inference with 2-bit quantization and distributed computing.**
+**Out-of-Core Inference Engine for Running 7B+ LLMs on Single Devices with Limited RAM**
 
 ## 🚀 Features
 
-- **Ultra-Low Memory Usage**: Run large models on devices with limited RAM using advanced quantization (4-bit, 8-bit)
-- **Distributed Inference**: Split models across multiple devices (swarm computing)
-- **gRPC-Based Communication**: Fast and efficient network communication between shards
-- **Easy to Use**: Simple CLI interface for local and distributed inference
-- **Model Agnostic**: Works with any HuggingFace transformer model
-- **Quantization Support**: 4-bit and 8-bit quantization for memory efficiency
+- **True Out-of-Core Inference**: Run large models on devices with limited RAM by loading weights directly from disk
+- **No Full Model Loading**: Never loads the entire model into RAM at once
+- **Direct File Access**: Reads tensors directly from GGUF/Safetensors files on demand
+- **Complete Transformer Support**: Full forward pass with RoPE, RMSNorm, Causal Mask, KV Cache, GQA
+- **Quantization Support**: Q4 and Q8 quantization for memory efficiency (2x-4x compression)
+- **Tensor Caching**: LRU cache for loaded tensors to avoid repeated file reads
+- **Performance Monitoring**: Track RAM usage, GPU usage, tokens/sec, and loading times
+- **Model Agnostic**: Works with Llama, Mistral, Qwen, Phi-2, and other transformer models
 
 ## 📦 Installation
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.8+
+- PyTorch 2.0+
 - Git
 - pip
 
@@ -30,224 +33,189 @@
 git clone https://github.com/LeaderX404/HiveMind.git
 cd HiveMind
 
-# Create virtual environment (recommended)
+# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Generate protobuf files
-python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
-
-# Install package
+# Install HiveMind
 pip install -e .
 ```
 
-### Install via pip (coming soon)
+### Install with pip (coming soon)
 
 ```bash
-pip install hivemind
+pip install hivemind-valcryptia
 ```
 
-## 🎯 Quick Start
+## 🏗️ Architecture
 
-### Local Inference
-
-Run a model locally with 4-bit quantization:
-
-```bash
-python -m hivemind.cli --mode local --model microsoft/phi-2 --quantize --bits 4 --prompt "What is AI?"
-```
-
-### Distributed Inference (Swarm Mode)
-
-**On Device 1 (Shard 0):**
-```bash
-python -m hivemind.cli --mode server --model microsoft/phi-2 --quantize --bits 4 --shards 2 --port 50051
-# Enter 0 when prompted for shard index
-```
-
-**On Device 2 (Shard 1):**
-```bash
-python -m hivemind.cli --mode server --model microsoft/phi-2 --quantize --bits 4 --shards 2 --port 50052
-# Enter 1 when prompted for shard index
-```
-
-**On Main Device:**
-```bash
-python -m hivemind.cli --mode swarm --model microsoft/phi-2 --quantize --bits 4 --shards 2 --prompt "Explain machine learning"
-```
-
-## 📂 Project Structure
+### Core Components
 
 ```
-hivemind/
-├── hivemind/
-│   ├── __init__.py
-│   ├── cli.py              # Command-line interface
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── model_loader.py  # Model loading and quantization
-│   │   ├── sharder.py       # Model sharding logic
-│   │   └── inference.py     # Inference engines
-│   ├── net/
-│   │   ├── __init__.py
-│   │   ├── server.py        # gRPC server for shards
-│   │   ├── client.py        # gRPC client for shards
-│   │   └── proto/
-│   │       └── inference.proto  # Protocol buffer definitions
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   ├── logger.py        # Logging utilities
-│   │   └── helpers.py       # Helper functions
-│   └── mobile/              # Mobile support (coming soon)
-│       └── __init__.py
-├── examples/
-│   ├── basic_inference.py   # Basic inference example
-│   └── swarm_inference.py   # Distributed inference example
-├── config/
-│   └── config.yaml          # Configuration file
-├── tests/                   # Unit tests (coming soon)
-├── scripts/                 # Utility scripts (coming soon)
-├── requirements.txt         # Python dependencies
-├── setup.py                 # Package setup
-├── README.md                # This file
-├── LICENSE                  # MIT License
-└── .gitignore
+┌─────────────────────────────────────────────────────────────┐
+│                    HiveMind by VALCRYPTIA                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │ DirectFile   │    │ FileBacked   │    │PagedTransform│  │
+│  │ ModelLoader  │───▶│    Pager     │───▶│   Engine     │  │
+│  └──────────────┘    └──────────────┘    └──────────────┘  │
+│                       │                  │                 │
+│                       ▼                  ▼                 │
+│              ┌─────────────────────────────────┐            │
+│              │       GGUF/Safetensors Files      │            │
+│              │  (Never fully loaded into RAM)   │            │
+│              └─────────────────────────────────┘            │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## 🔧 Usage Examples
+### Key Features
 
-### Python API
+1. **DirectFileModelLoader**: Reads model tensors directly from files without loading the entire model
+2. **FileBackedPager**: Manages tensor loading with configurable page sizes and LRU caching
+3. **PagedTransformerEngine**: Implements full transformer forward pass with:
+   - Embeddings
+   - Rotary Position Embedding (RoPE)
+   - RMS Normalization
+   - Multi-Head Attention with Causal Mask
+   - Feed-Forward Networks
+   - Residual Connections
+   - KV Cache for efficient generation
+   - GQA (Grouped Query Attention) support
+
+## 💡 Quick Start
+
+### Basic Usage
 
 ```python
-from hivemind.core.model_loader import ModelLoader
-from hivemind.core.inference import LocalInferenceEngine
+from hivemind.core.direct_loader import DirectFileModelLoader
+from hivemind.core.file_pager import FileBackedPager
+from hivemind.core.transformer_engine import PagedTransformerEngine, TransformerConfig
+from transformers import AutoTokenizer
 
-# Load model with 4-bit quantization
-loader = ModelLoader(
-    model_name="microsoft/phi-2",
-    quantize=True,
-    bits=4
+# Initialize components
+loader = DirectFileModelLoader("model.safetensors", device="cpu")
+pager = FileBackedPager("model.safetensors", page_size_mb=1000, device="cpu")
+
+# Create transformer config (example: Llama)
+config = TransformerConfig(
+    model_type="llama",
+    hidden_size=4096,
+    num_layers=32,
+    num_attention_heads=32,
+    vocab_size=32000,
+    use_rms_norm=True
 )
-model, tokenizer = loader.load()
 
-# Create inference engine
-engine = LocalInferenceEngine(model, tokenizer)
+# Initialize tokenizer
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
 
-# Generate response
-response = engine.generate("What is the meaning of life?", max_new_tokens=100)
+# Create engine
+engine = PagedTransformerEngine(pager, tokenizer, config, device="cpu")
+
+# Generate text
+response = engine.generate("What is the meaning of life?", max_new_tokens=50)
 print(response)
 ```
 
-### Distributed Inference
+### With Quantization
 
 ```python
-from hivemind.core.model_loader import ModelLoader
-from hivemind.core.sharder import ModelSharder
-from hivemind.core.inference import ShardedInferenceEngine
+from hivemind.core.direct_loader import DirectFileModelLoader
+from hivemind.core.transformer_engine import PagedTransformerEngine, TransformerConfig
 
-# Load and shard model
-loader = ModelLoader("microsoft/phi-2", quantize=True, bits=4)
-model, tokenizer = loader.load()
+# Use Q8 quantization
+config = TransformerConfig(
+    model_type="llama",
+    hidden_size=4096,
+    num_layers=32,
+    num_attention_heads=32,
+    vocab_size=32000,
+    quant_bits=8  # Enable Q8 quantization
+)
 
-sharder = ModelSharder(model, num_shards=2)
-shards = sharder.split()
+loader = DirectFileModelLoader("model-quant.safetensors", device="cpu", quant_bits=8)
+engine = PagedTransformerEngine(pager, tokenizer, config, device="cpu")
 
-# Create sharded inference engine
-engine = ShardedInferenceEngine(shards, tokenizer)
-
-# Generate response
-response = engine.generate("Explain AI", max_new_tokens=50)
-print(response)
+# Generate with quantized model
+response = engine.generate("Explain AI in simple terms", max_new_tokens=50)
 ```
 
-### gRPC Client/Server
+## 🎯 Supported Models
 
-**Server:**
-```python
-from hivemind.core.model_loader import ModelLoader
-from hivemind.core.sharder import ModelSharder
-from hivemind.net.server import serve
-
-loader = ModelLoader("microsoft/phi-2", quantize=True, bits=4)
-model, tokenizer = loader.load()
-
-sharder = ModelSharder(model, num_shards=2)
-shards = sharder.split()
-
-# Start server for shard 0
-serve(shard_index=0, shard_layers=shards[0], port=50051)
-```
-
-**Client:**
-```python
-import torch
-from hivemind.net.client import InferenceClient
-
-client = InferenceClient("localhost:50051")
-input_tensor = torch.randn(1, 10, 2560)
-output_tensor = client.process_shard(input_tensor)
-print(output_tensor.shape)
-```
-
-## 🔍 Supported Models
-
-HiveMind works with any HuggingFace transformer model. Some tested models:
-
-- `microsoft/phi-2` (2.7B parameters)
-- `google/gemma-2b` (2B parameters)
-- `mistralai/Mistral-7B-v0.1` (7B parameters)
-- `facebook/opt-1.3b` (1.3B parameters)
-- `EleutherAI/gpt-neo-2.7B` (2.7B parameters)
-
-## ⚙️ Configuration
-
-Edit `config/config.yaml` to customize settings:
-
-```yaml
-model:
-  name: "microsoft/phi-2"
-  quantize: true
-  bits: 4
-  device: "auto"
-
-sharding:
-  num_shards: 2
-  shard_dir: "shards"
-
-network:
-  host: "localhost"
-  port: 50051
-  timeout: 30
-
-inference:
-  max_new_tokens: 50
-  temperature: 0.7
-  top_p: 0.9
-  top_k: 50
-```
+- ✅ **Llama** (all versions)
+- ✅ **Mistral** (with GQA support)
+- ✅ **Qwen**
+- ✅ **Phi-2**
+- ✅ **Custom transformer models**
 
 ## 📊 Performance
 
-| Model | Size | Quantization | VRAM Usage | Inference Speed |
-|-------|------|--------------|------------|-----------------|
-| phi-2 | 2.7B | 4-bit | ~1.5GB | ~10 tokens/sec |
-| phi-2 | 2.7B | 8-bit | ~3GB | ~15 tokens/sec |
-| phi-2 | 2.7B | None | ~10GB | ~20 tokens/sec |
+### Memory Requirements
 
-*Benchmark on RTX 3060 with 12GB VRAM*
+| Model Size | FP16 | Q8 | Q4 |
+|------------|------|----|----|
+| 1B | ~2GB | ~1GB | ~500MB |
+| 7B | ~14GB | ~7GB | ~3.5GB |
+| 13B | ~26GB | ~13GB | ~6.5GB |
+
+### Speed Estimates (with NVMe SSD)
+
+| Hardware | Tokens/sec |
+|----------|------------|
+| CPU only | 5-10 |
+| RTX 3060 | 20-50 |
+| RTX 4090 | 50-100 |
+
+## 🔧 Configuration
+
+### TransformerConfig Parameters
+
+```python
+config = TransformerConfig(
+    model_type="llama",      # Model architecture (llama, mistral, qwen, phi)
+    hidden_size=4096,        # Hidden layer size
+    num_layers=32,           # Number of transformer layers
+    num_attention_heads=32,  # Number of attention heads
+    num_key_value_heads=8,   # Number of KV heads (for GQA)
+    vocab_size=32000,        # Vocabulary size
+    max_position_embeddings=32768,  # Maximum position embeddings
+    head_dim=128,            # Head dimension
+    rope_theta=500000.0,     # RoPE theta parameter
+    use_rms_norm=True,       # Use RMSNorm (for Llama/Mistral)
+    quant_bits=None          # Quantization bits (4 or 8)
+)
+```
+
+## 🧪 Testing
+
+Run the test suites:
+
+```bash
+# Out-of-core tests
+python -m examples.test_out_of_core
+
+# Quantization tests
+python -m examples.test_quantization
+
+# Unit tests
+pytest tests/unit/
+```
+
+## 📚 Documentation
+
+- [Installation Guide](docs/installation.md)
+- [User Guide](docs/user_guide.md)
+- [API Reference](docs/api_reference.md)
+- [Contribution Guide](docs/contributing.md)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## 📜 License
 
@@ -255,18 +223,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- [HuggingFace Transformers](https://github.com/huggingface/transformers)
-- [PyTorch](https://github.com/pytorch/pytorch)
-- [gRPC](https://github.com/grpc/grpc)
-- [bitsandbytes](https://github.com/TimDettmers/bitsandbytes)
-- [Accelerate](https://github.com/huggingface/accelerate)
-
-## 📞 Contact
-
-For questions or support, please open an issue on GitHub.
+- Hugging Face Transformers
+- PyTorch
+- GGUF format by gerganov
+- Safetensors format
 
 ---
 
-**Made with ❤️ by LeaderX404**
+**HiveMind by VALCRYPTIA** - Revolutionizing LLM Inference on Limited Hardware
 
-*Run LLMs anywhere, on any device.*
+*Built with ❤️ by VALCRYPTIA*

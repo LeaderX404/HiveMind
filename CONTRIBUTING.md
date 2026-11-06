@@ -1,0 +1,167 @@
+# Contributing to HiveMind by VALCRYPTIA
+
+Thank you for your interest in contributing to **HiveMind by VALCRYPTIA**! We welcome contributions from everyone.
+
+## 📋 Code of Conduct
+
+By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## 🎯 How Can I Contribute?
+
+### Reporting Bugs
+
+If you find a bug, please [open an issue](https://github.com/LeaderX404/HiveMind/issues) with:
+- A clear description of the bug
+- Steps to reproduce
+- Expected vs actual behavior
+- Your environment (Python version, OS, etc.)
+
+### Suggesting Features
+
+We welcome feature suggestions! Please [open an issue](https://github.com/LeaderX404/HiveMind/issues) with:
+- A clear description of the feature
+- The problem it solves
+- Any relevant examples or references
+
+### Pull Requests
+
+We welcome pull requests! Please follow these guidelines:
+
+1. **Fork the repository** and create a feature branch
+2. **Follow the coding style** (PEP 8, type hints, docstrings)
+3. **Add tests** for new functionality
+4. **Update documentation** if needed
+5. **Keep commits atomic** (one logical change per commit)
+6. **Write clear commit messages**
+
+## 🚀 Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/LeaderX404/HiveMind.git
+cd HiveMind
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
+# Install in development mode
+pip install -e .
+```
+
+## 📁 Project Structure
+
+```
+hivemind/
+├── hivemind/
+│   ├── __init__.py          # Main package initialization
+│   ├── cli.py               # Command-line interface
+│   ├── core/
+│   │   ├── __init__.py      # Core module exports
+│   │   ├── direct_loader.py # Direct file model loader
+│   │   ├── file_pager.py    # File-backed pager
+│   │   ├── transformer_engine.py # Paged transformer engine
+│   │   ├── model_loader.py  # Original model loader
+│   │   ├── sharder.py       # Model sharder
+│   │   ├── inference.py     # Inference engines
+│   │   ├── quantizer.py     # Quantization utilities
+│   │   └── pager.py         # Original pager
+│   └── utils/
+│       ├── __init__.py      # Utils module exports
+│       ├── logger.py        # Logging utilities
+│       ├── helpers.py       # Helper functions
+│       ├── perf_monitor.py  # Performance monitoring
+│       └── quant_utils.py   # Quantization utilities
+├── examples/
+│   ├── test_out_of_core.py  # Out-of-core test script
+│   └── test_quantization.py # Quantization test script
+├── tests/
+│   └── unit/
+│       ├── test_*.py       # Unit tests
+├── docs/
+│   └── *.md                # Documentation
+├── README.md
+├── LICENSE
+├── setup.py
+└── requirements.txt
+```
+
+## 💡 Coding Guidelines
+
+### Python Style
+- Follow [PEP 8](https://pep8.org/)
+- Use type hints for all functions
+- Use descriptive variable and function names
+- Keep lines under 100 characters
+
+### Documentation
+- Add docstrings to all modules, classes, and functions
+- Use Google-style docstrings
+- Keep documentation up-to-date
+
+### Testing
+- Add unit tests for new functionality
+- Ensure tests pass before submitting PRs
+- Run tests with: `pytest tests/`
+
+### Commits
+- Use clear, descriptive commit messages
+- Follow [Conventional Commits](https://www.conventionalcommits.org/)
+- Examples:
+  - `feat: add Q4 quantization support`
+  - `fix: correct RoPE implementation`
+  - `docs: update README with new features`
+
+## ✅ Pull Request Template
+
+```markdown
+## Description
+
+[Clear description of changes]
+
+## Related Issues
+
+[Link to related issues]
+
+## Changes Made
+
+- [ ] Added new feature
+- [ ] Fixed bug
+- [ ] Updated documentation
+- [ ] Added tests
+- [ ] Refactored code
+
+## Testing
+
+- [ ] All existing tests pass
+- [ ] New tests added for new functionality
+- [ ] Manual testing performed
+
+## Checklist
+
+- [ ] Code follows PEP 8 guidelines
+- [ ] Type hints added
+- [ ] Docstrings updated
+- [ ] No breaking changes (or documented)
+```
+
+## 🎓 Getting Help
+
+If you need help:
+- Check the [documentation](docs/)
+- Open an [issue](https://github.com/LeaderX404/HiveMind/issues)
+- Join our [Discord community](https://discord.gg/valcryptia) (coming soon)
+
+## 🙏 Recognition
+
+All contributors will be recognized in the CONTRIBUTORS.md file.
+
+---
+
+**Thank you for contributing to HiveMind by VALCRYPTIA!** 🚀
+
+*Built with ❤️ by VALCRYPTIA*

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-HiveMind - Neural Swarm Inference for LLMs on low-end devices
+HiveMind by VALCRYPTIA - Out-of-Core Inference Engine for LLMs
 """
 
 from setuptools import setup, find_packages
@@ -9,10 +9,12 @@ with open("requirements.txt") as f:
     requirements = f.read().splitlines()
 
 setup(
-    name="hivemind",
-    version="0.1.0",
-    description="Run 7B+ LLMs on low-end devices via Neural Swarm Inference (2-bit quantization + distributed computing)",
-    author="LeaderX404",
+    name="hivemind-valcryptia",
+    version="2.1.0",
+    description="Out-of-Core Inference Engine for Running 7B+ LLMs on Single Devices with Limited RAM",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
+    author="VALCRYPTIA",
     author_email="",
     url="https://github.com/LeaderX404/HiveMind",
     packages=find_packages(),
@@ -23,7 +25,7 @@ setup(
         ],
     },
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: MIT License",
@@ -32,6 +34,7 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],

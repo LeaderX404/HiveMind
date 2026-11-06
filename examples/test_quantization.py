@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Test script for Q4 and Q8 Quantization
-Demonstrates HiveMind v2.1 quantization support for 1B models
+Demonstrates HiveMind by VALCRYPTIA - Quantization support for 1B models
 """
 import torch
 from hivemind.utils.quant_utils import (
@@ -125,7 +125,7 @@ def test_model_state_dict():
 def main():
     """Run all quantization tests"""
     print("=" * 70)
-    print("HiveMind v2.1: Q4 and Q8 Quantization Test Suite")
+    print("HiveMind by VALCRYPTIA: Q4 and Q8 Quantization Test Suite")
     print("=" * 70)
     
     test_q8_quantization()
@@ -149,6 +149,7 @@ def main():
     print("  • FP16: ~2GB")
     print("  • Q8: ~1GB")
     print("  • Q4: ~500MB")
+    print("\nBuilt with ❤️ by VALCRYPTIA")
 
 
 if __name__ == "__main__":
