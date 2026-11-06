@@ -28,7 +28,8 @@ class TransformerConfig:
                  head_dim: Optional[int] = None,
                  rope_theta: float = 500000.0,
                  use_rms_norm: bool = True,
-                 quant_bits: Optional[int] = None):
+                 rms_norm_eps: float = 1e-5,
+                 tie_word_embeddings: bool = False):
         self.model_type = model_type
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -39,13 +40,8 @@ class TransformerConfig:
         self.max_position_embeddings = max_position_embeddings
         self.rope_theta = rope_theta
         self.use_rms_norm = use_rms_norm
-        self.quant_bits = quant_bits
-        
-        # Quantization config
-        if quant_bits is not None:
-            self.quant_config = QuantizationConfig(bits=quant_bits)
-        else:
-            self.quant_config = None
+        self.rms_norm_eps = rms_norm_eps
+        self.tie_word_embeddings = tie_word_embeddings
         
         # Precompute RoPE frequencies
         self._rope_freqs = self._precompute_rope_frequencies()
@@ -56,6 +52,32 @@ class TransformerConfig:
         head_dim = self.head_dim or (self.hidden_size // self.num_attention_heads)
         inv_freq = 1.0 / (self.rope_theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
         return inv_freq
+
+    @classmethod
+    def from_hf_config(cls, config: Any) -> "TransformerConfig":
+        """Build a TransformerConfig from a Hugging Face config (object, dict, or config.json path)."""
+        if isinstance(config, str):
+            import json
+            with open(config) as f:
+                config = json.load(f)
+        get = (lambda k, d=None: config.get(k, d)) if isinstance(config, dict) else (lambda k, d=None: getattr(config, k, d))
+        rope_theta = get("rope_theta")
+        if rope_theta is None:
+            rope_params = get("rope_parameters") or {}
+            rope_theta = rope_params.get("rope_theta", 10000.0)
+        return cls(
+            model_type=get("model_type", "llama"),
+            hidden_size=get("hidden_size"),
+            num_layers=get("num_hidden_layers"),
+            num_attention_heads=get("num_attention_heads"),
+            num_key_value_heads=get("num_key_value_heads"),
+            vocab_size=get("vocab_size"),
+            max_position_embeddings=get("max_position_embeddings", 32768),
+            head_dim=get("head_dim"),
+            rope_theta=rope_theta,
+            rms_norm_eps=get("rms_norm_eps", 1e-5),
+            tie_word_embeddings=bool(get("tie_word_embeddings", False)),
+        )
 
 
 class LayerConfig:
@@ -91,7 +113,7 @@ class PagedTransformerEngine:
                  tokenizer: Any,
                  config: TransformerConfig,
                  device: str = "cpu",
-                 batch_size: int = 1):
+                 max_cached_tensors: int = 100):
         """
         Initialize paged transformer engine.
         
@@ -100,7 +122,8 @@ class PagedTransformerEngine:
             tokenizer: Tokenizer
             config: Transformer configuration
             device: Device to use
-            batch_size: Batch size for generation (Phase 2 feature)
+            max_cached_tensors: Tensors kept by the engine's own FIFO cache (0 disables it,
+                leaving RAM usage bounded by the FileBackedPager page cache only)
         """
         self.file_pager = file_pager
         self.tokenizer = tokenizer
@@ -126,7 +149,7 @@ class PagedTransformerEngine:
         
         # Tensor cache: LRU cache for loaded tensors
         self.tensor_cache = {}
-        self.max_cached_tensors = 100
+        self.max_cached_tensors = max_cached_tensors
         
         # Quantization support
         self.quant_bits = config.quant_bits
@@ -147,12 +170,9 @@ class PagedTransformerEngine:
         # Load from file
         tensor = self.file_pager.load_tensor(tensor_name)
         
-        # If quantized, ensure it's dequantized
-        if self.config.quant_config is not None and tensor.dtype == torch.uint8:
-            # This might be a quantized tensor, try to dequantize
-            # For now, we assume the loader handles dequantization
-            pass
-        
+        if self.max_cached_tensors <= 0:
+            return tensor
+
         # Cache it
         if len(self.tensor_cache) >= self.max_cached_tensors:
             # Simple eviction: remove first key
@@ -170,8 +190,8 @@ class PagedTransformerEngine:
         # Compute RoPE frequencies
         inv_freq = self.config._rope_freqs.to(x.device)
         
-        # Create position embeddings
-        pos_emb = torch.outer(position_ids.float(), inv_freq)
+        # Create position embeddings (position_ids may be [seq] or [1, seq])
+        pos_emb = torch.outer(position_ids.reshape(-1).float(), inv_freq)
         
         # Create cos and sin embeddings
         cos_emb = torch.cos(pos_emb)
@@ -181,6 +201,9 @@ class PagedTransformerEngine:
         cos_emb = cos_emb.unsqueeze(0).unsqueeze(0)
         sin_emb = sin_emb.unsqueeze(0).unsqueeze(0)
         
+        cos_emb = cos_emb.to(x.dtype)
+        sin_emb = sin_emb.to(x.dtype)
+
         # Split x into two parts for RoPE
         x1 = x[..., :head_dim//2]
         x2 = x[..., head_dim//2:]
@@ -193,10 +216,12 @@ class PagedTransformerEngine:
     
     def _rms_norm(self, x: torch.Tensor, prefix: str, suffix: str = "") -> torch.Tensor:
         """Apply RMS Normalization (used in Llama, Mistral)"""
-        weight = self._load_tensor(f"{prefix}.input_layernorm{suffix}.weight")
+        # suffix is the full sub-module name, e.g. ".input_layernorm" or ".post_attention_layernorm"
+        weight = self._load_tensor(f"{prefix}{suffix}.weight")
         # RMSNorm: x * weight / sqrt(mean(x^2) + eps)
-        norm = x * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
-        return norm * weight
+        x_f = x.float()
+        norm = x_f * torch.rsqrt(x_f.pow(2).mean(-1, keepdim=True) + self.config.rms_norm_eps)
+        return norm.to(x.dtype) * weight
     
     def _layer_norm(self, x: torch.Tensor, prefix: str, suffix: str = "") -> torch.Tensor:
         """Apply layer normalization (backward compatibility)"""
@@ -207,93 +232,70 @@ class PagedTransformerEngine:
             bias = self._load_tensor(f"{prefix}.input_layernorm{suffix}.bias")
             return F.layer_norm(x, (self.config.hidden_size,), weight, bias)
     
-    def _quantized_linear(self, x: torch.Tensor, weight_name: str) -> torch.Tensor:
-        """Linear operation with quantized weights"""
-        # Load quantized weight
-        quantized_weight = self._load_tensor(weight_name)
-        
-        # If quantized, dequantize
-        if self.config.quant_config is not None and quantized_weight.dtype == torch.uint8:
-            # Load scales and zeros
-            scales_name = weight_name.replace('.weight', '.scales')
-            zeros_name = weight_name.replace('.weight', '.zeros')
-            
-            try:
-                scales = self._load_tensor(scales_name)
-                zeros = self._load_tensor(zeros_name)
-                weight = dequantize_tensor(quantized_weight, scales, zeros, self.config.quant_config)
-            except:
-                # If scales/zeros not found, use the weight as-is
-                weight = quantized_weight
-        else:
-            weight = quantized_weight
-        
-        return F.linear(x, weight)
-    
-    def _attention(self, x: torch.Tensor, layer_config: LayerConfig, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Compute attention with RoPE and causal mask"""
+    def _attention(self, x: torch.Tensor, layer_config: LayerConfig,
+                   position_ids: Optional[torch.Tensor] = None,
+                   use_cache: bool = False) -> torch.Tensor:
+        """Compute attention with RoPE, causal mask, GQA and an optional KV cache."""
         prefix = layer_config.prefix
-        
-        # Use quantized linear if quantization is enabled
-        if self.config.quant_config is not None:
-            q = self._quantized_linear(x, f"{prefix}.self_attn.q_proj.weight")
-            k = self._quantized_linear(x, f"{prefix}.self_attn.k_proj.weight")
-            v = self._quantized_linear(x, f"{prefix}.self_attn.v_proj.weight")
-            o = self._quantized_linear(x, f"{prefix}.self_attn.o_proj.weight")
-        else:
-            # Load weights normally
-            q_proj = self._load_tensor(f"{prefix}.self_attn.q_proj.weight")
-            k_proj = self._load_tensor(f"{prefix}.self_attn.k_proj.weight")
-            v_proj = self._load_tensor(f"{prefix}.self_attn.v_proj.weight")
-            o_proj = self._load_tensor(f"{prefix}.self_attn.o_proj.weight")
-            
-            # Project
-            q = F.linear(x, q_proj)
-            k = F.linear(x, k_proj)
-            v = F.linear(x, v_proj)
-        
-        # Reshape for multi-head
+        layer_idx = layer_config.layer_index
+        num_heads = layer_config.num_attention_heads
+        num_kv_heads = layer_config.num_key_value_heads
+        head_dim = layer_config.head_dim
+
+        # Load weights
+        q_proj = self._load_tensor(f"{prefix}.self_attn.q_proj.weight")
+        k_proj = self._load_tensor(f"{prefix}.self_attn.k_proj.weight")
+        v_proj = self._load_tensor(f"{prefix}.self_attn.v_proj.weight")
+        o_proj = self._load_tensor(f"{prefix}.self_attn.o_proj.weight")
+
+        # Project
         batch_size, seq_len, _ = x.shape
-        q = q.view(batch_size, seq_len, layer_config.num_attention_heads, layer_config.head_dim).transpose(1, 2)
-        k = k.view(batch_size, seq_len, layer_config.num_key_value_heads, layer_config.head_dim).transpose(1, 2)
-        v = v.view(batch_size, seq_len, layer_config.num_key_value_heads, layer_config.head_dim).transpose(1, 2)
-        
-        # Grouped Query Attention (GQA) support
-        if layer_config.num_attention_heads != layer_config.num_key_value_heads:
-            # Repeat KV heads for GQA
-            num_groups = layer_config.num_attention_heads // layer_config.num_key_value_heads
-            k = k.unsqueeze(2).expand(-1, -1, num_groups, -1, -1).reshape(
-                batch_size, layer_config.num_attention_heads, seq_len, layer_config.head_dim)
-            v = v.unsqueeze(2).expand(-1, -1, num_groups, -1, -1).reshape(
-                batch_size, layer_config.num_attention_heads, seq_len, layer_config.head_dim)
-        
-        # Apply RoPE
+        q = F.linear(x, q_proj).view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+        k = F.linear(x, k_proj).view(batch_size, seq_len, num_kv_heads, head_dim).transpose(1, 2)
+        v = F.linear(x, v_proj).view(batch_size, seq_len, num_kv_heads, head_dim).transpose(1, 2)
+
+        # Apply RoPE to the new positions only
         if position_ids is not None:
             q = self._apply_rope(q, position_ids)
             k = self._apply_rope(k, position_ids)
-        
-        # Causal mask: prevent attending to future tokens
+
+        # KV cache: append new keys/values to those of previous steps (stored before GQA expansion)
+        past_len = 0
+        if use_cache:
+            if self.kv_cache is None:
+                self._initialize_kv_cache(batch_size)
+            past_k = self.kv_cache['k'][layer_idx]
+            past_v = self.kv_cache['v'][layer_idx]
+            if past_k is not None:
+                past_len = past_k.size(2)
+                k = torch.cat([past_k, k], dim=2)
+                v = torch.cat([past_v, v], dim=2)
+            self.kv_cache['k'][layer_idx] = k
+            self.kv_cache['v'][layer_idx] = v
+
+        # Grouped Query Attention (GQA): repeat KV heads to match query heads
+        if num_heads != num_kv_heads:
+            num_groups = num_heads // num_kv_heads
+            k = torch.repeat_interleave(k, num_groups, dim=1)
+            v = torch.repeat_interleave(v, num_groups, dim=1)
+
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+
+        # Causal mask: query i (absolute position past_len + i) may attend to keys 0..past_len + i
         if seq_len > 1:
-            # Create causal mask
-            causal_mask = torch.triu(torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device), diagonal=1)
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (layer_config.head_dim ** 0.5)
-            attn_scores = attn_scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
-        else:
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (layer_config.head_dim ** 0.5)
-        
-        attn_probs = F.softmax(attn_scores, dim=-1)
+            total_len = k.size(2)
+            causal_mask = torch.triu(
+                torch.ones(seq_len, total_len, dtype=torch.bool, device=x.device),
+                diagonal=past_len + 1)
+            attn_scores = attn_scores.masked_fill(causal_mask, float('-inf'))
+
+        attn_probs = F.softmax(attn_scores.float(), dim=-1).to(q.dtype)
         context = torch.matmul(attn_probs, v)
-        
+
         # Reshape back
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-        
-        if self.config.quant_config is not None:
-            output = self._quantized_linear(context, f"{prefix}.self_attn.o_proj.weight")
-        else:
-            output = F.linear(context, o_proj)
-        
-        return output
-    
+        return F.linear(context, o_proj)
+
     def _feed_forward(self, x: torch.Tensor, layer_config: LayerConfig) -> torch.Tensor:
         """Feed-forward network with optional quantization"""
         prefix = layer_config.prefix
@@ -320,7 +322,9 @@ class PagedTransformerEngine:
         
         return output
     
-    def _transformer_layer(self, x: torch.Tensor, layer_config: LayerConfig, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _transformer_layer(self, x: torch.Tensor, layer_config: LayerConfig,
+                           position_ids: Optional[torch.Tensor] = None,
+                           use_cache: bool = False) -> torch.Tensor:
         """Single transformer layer with RoPE and KV Cache"""
         prefix = layer_config.prefix
         
@@ -329,7 +333,7 @@ class PagedTransformerEngine:
         x = self._rms_norm(x, prefix, suffix=".input_layernorm")
         
         # Attention with position IDs
-        attn_out = self._attention(x, layer_config, position_ids)
+        attn_out = self._attention(x, layer_config, position_ids, use_cache=use_cache)
         x = residual + attn_out
         
         # Post-attention layer norm
@@ -363,8 +367,9 @@ class PagedTransformerEngine:
         """Final layer norm"""
         if self.config.use_rms_norm:
             weight = self._load_tensor("model.norm.weight")
-            norm = x * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
-            return norm * weight
+            x_f = x.float()
+            norm = x_f * torch.rsqrt(x_f.pow(2).mean(-1, keepdim=True) + self.config.rms_norm_eps)
+            return norm.to(x.dtype) * weight
         else:
             weight = self._load_tensor("model.norm.weight")
             bias = self._load_tensor("model.norm.bias")
@@ -372,7 +377,10 @@ class PagedTransformerEngine:
     
     def _get_logits(self, x: torch.Tensor) -> torch.Tensor:
         """Get output logits"""
-        weight = self._load_tensor("lm_head.weight")
+        if self.config.tie_word_embeddings or "lm_head.weight" not in self.file_pager.loader.tensor_infos:
+            weight = self._load_tensor("model.embed_tokens.weight")
+        else:
+            weight = self._load_tensor("lm_head.weight")
         return F.linear(x, weight)
     
     def _initialize_kv_cache(self, batch_size: int):
@@ -385,6 +393,11 @@ class PagedTransformerEngine:
             self.kv_cache['k'].append(None)
             self.kv_cache['v'].append(None)
     
+    def reset_cache(self):
+        """Clear the KV cache and position counter."""
+        self.kv_cache = None
+        self.current_position = 0
+
     def forward(self, input_ids: torch.Tensor, use_cache: bool = False) -> torch.Tensor:
         """Full forward pass with KV Cache support"""
         batch_size, seq_len = input_ids.shape
@@ -392,18 +405,16 @@ class PagedTransformerEngine:
         # Embeddings
         x = self._get_embedding(input_ids)
         
-        # Position IDs for RoPE
-        if self.current_position == 0:
-            position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0)
-        else:
-            position_ids = torch.arange(self.current_position, self.current_position + seq_len, device=self.device).unsqueeze(0)
+        # Position IDs for RoPE (absolute positions, continuing from the KV cache when used)
+        start = self.current_position if use_cache else 0
+        position_ids = torch.arange(start, start + seq_len, device=self.device).unsqueeze(0)
         
         # Position embeddings (if used)
         x = self._get_position_embedding(x, position_ids)
         
         # Transformer layers
         for layer_config in self.layer_configs:
-            x = self._transformer_layer(x, layer_config, position_ids)
+            x = self._transformer_layer(x, layer_config, position_ids, use_cache=use_cache)
         
         # Final norm
         x = self._final_norm(x)
@@ -423,12 +434,9 @@ class PagedTransformerEngine:
         input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
         input_length = input_ids.size(1)
         
-        # Reset position counter
-        self.current_position = 0
-        
-        # Pre-allocate KV cache
-        if self.kv_cache is None:
-            self._initialize_kv_cache(input_ids.size(0))
+        # Reset position counter and KV cache for a fresh generation
+        self.reset_cache()
+        self._initialize_kv_cache(input_ids.size(0))
         
         for step in range(max_new_tokens):
             with torch.no_grad():
@@ -444,6 +452,14 @@ class PagedTransformerEngine:
             # Get last token logits
             last_logits = logits[0, -1, :]
             
+            # Greedy decoding when temperature == 0
+            if temperature == 0:
+                next_token = torch.argmax(last_logits).reshape(1)
+                input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+                if next_token.item() == self.tokenizer.eos_token_id:
+                    break
+                continue
+
             # Apply sampling
             if temperature > 0:
                 last_logits = last_logits / temperature

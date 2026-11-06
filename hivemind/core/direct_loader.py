@@ -57,6 +57,8 @@ class DirectFileModelLoader:
     
     def _load_model_info(self) -> Dict[str, Any]:
         """Load model metadata without loading weights"""
+        if not self.model_path.exists():
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
         if self.model_path.suffix == '.gguf':
             return self._load_gguf_info()
         elif self.model_path.suffix == '.safetensors':
@@ -66,18 +68,14 @@ class DirectFileModelLoader:
     
     def _load_gguf_info(self) -> Dict[str, Any]:
         """Load GGUF metadata"""
-        try:
-            from gguf import GGUFReader
-            with GGUFReader(self.model_path) as reader:
-                return {
-                    'format': 'gguf',
-                    'tensors': list(reader.tensors.keys()),
-                    'metadata': dict(reader.metadata),
-                    'quantization': reader.metadata.get('general.quantization', 'none')
-                }
-        except ImportError:
-            raise ImportError("gguf-py required. Install: pip install gguf-py")
-    
+        # GGUF needs: GGUFReader without a context manager, iteration over reader.tensors (a list),
+        # dequantization of Q4/Q8 blocks, and mapping of names like "blk.0.attn_q.weight" to the
+        # Hugging Face names used by PagedTransformerEngine. None of that is implemented yet, so
+        # fail clearly instead of with an unrelated TypeError.
+        raise NotImplementedError(
+            "GGUF loading is not implemented yet in DirectFileModelLoader; "
+            "use a .safetensors checkpoint for now.")
+
     def _load_safetensors_info(self) -> Dict[str, Any]:
         """Load Safetensors metadata"""
         from safetensors import safe_open
@@ -107,17 +105,23 @@ class DirectFileModelLoader:
                     }
         elif self.model_info['format'] == 'safetensors':
             from safetensors import safe_open
+            # Read shapes/dtypes from the header only, without materializing any tensor data
+            dtype_bytes = {'F64': 8, 'I64': 8, 'U64': 8, 'F32': 4, 'I32': 4, 'U32': 4,
+                           'F16': 2, 'BF16': 2, 'I16': 2, 'U16': 2,
+                           'I8': 1, 'U8': 1, 'BOOL': 1, 'F8_E4M3': 1, 'F8_E5M2': 1}
             with safe_open(self.model_path, framework="pt") as f:
                 for name in f.keys():
-                    tensor = f.get_tensor(name)
-                    is_quantized = name.endswith('_quant') or name.endswith('_scales') or name.endswith('_zeros')
-                    
+                    tensor_slice = f.get_slice(name)
+                    shape = tuple(tensor_slice.get_shape())
+                    dtype = tensor_slice.get_dtype()
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
                     infos[name] = {
-                        'shape': tuple(tensor.shape),
-                        'dtype': str(tensor.dtype),
-                        'size': tensor.numel() * tensor.element_size(),
-                        'offset': 0,
-                        'quantized': is_quantized
+                        'shape': shape,
+                        'dtype': dtype,
+                        'size': numel * dtype_bytes.get(dtype, 4),
+                        'offset': 0
                     }
         
         return infos
