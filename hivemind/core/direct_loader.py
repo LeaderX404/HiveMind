@@ -117,11 +117,14 @@ class DirectFileModelLoader:
                     numel = 1
                     for dim in shape:
                         numel *= dim
+                    # Check if this is a quantized tensor
+                    is_quantized = 'quant' in name.lower() or dtype in ['F8_E4M3', 'F8_E5M2']
                     infos[name] = {
                         'shape': shape,
                         'dtype': dtype,
                         'size': numel * dtype_bytes.get(dtype, 4),
-                        'offset': 0
+                        'offset': 0,
+                        'quantized': is_quantized
                     }
         
         return infos

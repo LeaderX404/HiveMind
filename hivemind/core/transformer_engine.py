@@ -29,7 +29,8 @@ class TransformerConfig:
                  rope_theta: float = 500000.0,
                  use_rms_norm: bool = True,
                  rms_norm_eps: float = 1e-5,
-                 tie_word_embeddings: bool = False):
+                 tie_word_embeddings: bool = False,
+                 quant_bits: Optional[int] = None):
         self.model_type = model_type
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -42,6 +43,14 @@ class TransformerConfig:
         self.use_rms_norm = use_rms_norm
         self.rms_norm_eps = rms_norm_eps
         self.tie_word_embeddings = tie_word_embeddings
+        self.quant_bits = quant_bits
+        
+        # Quantization config
+        if quant_bits is not None:
+            from hivemind.utils.quant_utils import QuantizationConfig
+            self.quant_config = QuantizationConfig(bits=quant_bits)
+        else:
+            self.quant_config = None
         
         # Precompute RoPE frequencies
         self._rope_freqs = self._precompute_rope_frequencies()
@@ -113,7 +122,8 @@ class PagedTransformerEngine:
                  tokenizer: Any,
                  config: TransformerConfig,
                  device: str = "cpu",
-                 max_cached_tensors: int = 100):
+                 max_cached_tensors: int = 100,
+                 batch_size: int = 1):
         """
         Initialize paged transformer engine.
         
@@ -124,11 +134,13 @@ class PagedTransformerEngine:
             device: Device to use
             max_cached_tensors: Tensors kept by the engine's own FIFO cache (0 disables it,
                 leaving RAM usage bounded by the FileBackedPager page cache only)
+            batch_size: Batch size for generation (Phase 2 feature)
         """
         self.file_pager = file_pager
         self.tokenizer = tokenizer
         self.config = config
         self.device = device
+        self.max_cached_tensors = max_cached_tensors
         self.batch_size = batch_size
         
         # Create layer configs
