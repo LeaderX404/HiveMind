@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+service InferenceService {
+  rpc ProcessShard (InferenceRequest) returns (InferenceResponse);
+}
+
+message InferenceRequest {
+  bytes input_data = 1;
+  string model_id = 2;
+  int32 shard_index = 3;
+}
+
+message InferenceResponse {
+  bytes output_data = 1;
+  string error = 2;
+}

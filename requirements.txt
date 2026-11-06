@@ -1,0 +1,13 @@
+torch>=2.0.0
+transformers>=4.30.0
+sentencepiece
+accelerate
+bitsandbytes
+grpcio
+grpcio-tools
+protobuf
+ray[default]
+flask
+pyyaml
+tensorflow
+tflite-runtime

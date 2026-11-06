@@ -1,0 +1,37 @@
+# HiveMind Configuration File
+
+# Model settings
+model:
+  name: "microsoft/phi-2"
+  quantize: true
+  bits: 4
+  device: "auto"  # "auto", "cuda", "cpu", "mps"
+
+# Sharding settings
+sharding:
+  num_shards: 2
+  shard_dir: "shards"
+
+# Network settings
+network:
+  host: "localhost"
+  port: 50051
+  timeout: 30
+
+# Inference settings
+inference:
+  max_new_tokens: 50
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "hivemind.log"
+
+# Performance settings
+performance:
+  use_cache: true
+  batch_size: 1
