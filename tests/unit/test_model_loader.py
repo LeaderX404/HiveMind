@@ -119,7 +119,10 @@ class TestModelLoader:
         loader = ModelLoader()
         
         assert loader.model_name == "microsoft/phi-2"
-        assert loader.quantize == False
+        assert loader.quantize == True  # Default is True in v2.0
         assert loader.bits == 4
         assert loader.model is None
         assert loader.tokenizer is None
+        assert loader.enable_paging == False
+        assert loader.page_size_mb == 1000
+        assert loader.max_loaded_pages == 4

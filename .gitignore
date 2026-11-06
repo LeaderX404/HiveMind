@@ -88,3 +88,6 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+model_cache/
+*.pkl
+__pycache__/
