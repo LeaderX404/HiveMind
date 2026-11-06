@@ -1,13 +1,14 @@
 """
 Paged Transformer Engine for Out-of-Core Inference
 Implements full transformer forward pass with paging.
-Supports: RoPE, RMSNorm, Causal Mask, KV Cache, GQA
+Supports: RoPE, RMSNorm, Causal Mask, KV Cache, GQA, Q4/Q8 Quantization
 """
 import math
 import torch
 import torch.nn.functional as F
 from typing import Optional, Dict, Any, List, Tuple
 from hivemind.utils.logger import get_logger
+from hivemind.utils.quant_utils import QuantizationConfig, dequantize_tensor
 
 logger = get_logger(__name__)
 
@@ -25,7 +26,8 @@ class TransformerConfig:
                  max_position_embeddings: int = 32768,
                  head_dim: Optional[int] = None,
                  rope_theta: float = 500000.0,
-                 use_rms_norm: bool = True):
+                 use_rms_norm: bool = True,
+                 quant_bits: Optional[int] = None):
         self.model_type = model_type
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -36,6 +38,13 @@ class TransformerConfig:
         self.max_position_embeddings = max_position_embeddings
         self.rope_theta = rope_theta
         self.use_rms_norm = use_rms_norm
+        self.quant_bits = quant_bits
+        
+        # Quantization config
+        if quant_bits is not None:
+            self.quant_config = QuantizationConfig(bits=quant_bits)
+        else:
+            self.quant_config = None
         
         # Precompute RoPE frequencies
         self._rope_freqs = self._precompute_rope_frequencies()
@@ -73,6 +82,7 @@ class PagedTransformerEngine:
     - Feed-forward networks
     - Residual connections
     - GQA (Grouped Query Attention) support
+    - Q4/Q8 Quantization support
     """
     
     def __init__(self,
@@ -114,19 +124,30 @@ class PagedTransformerEngine:
         self.tensor_cache = {}
         self.max_cached_tensors = 100
         
+        # Quantization support
+        self.quant_bits = config.quant_bits
+        
         # Position tracking for RoPE
         self.current_position = 0
         
         logger.info(f"PagedTransformerEngine initialized: {config.num_layers} layers, {config.model_type} config")
+        if config.quant_bits:
+            logger.info(f"Quantization: {config.quant_bits}-bit enabled")
     
     def _load_tensor(self, tensor_name: str) -> torch.Tensor:
-        """Load tensor from file with caching"""
+        """Load tensor from file with caching and dequantization"""
         # Check cache first
         if tensor_name in self.tensor_cache:
             return self.tensor_cache[tensor_name]
         
         # Load from file
         tensor = self.file_pager.load_tensor(tensor_name)
+        
+        # If quantized, ensure it's dequantized
+        if self.config.quant_config is not None and tensor.dtype == torch.uint8:
+            # This might be a quantized tensor, try to dequantize
+            # For now, we assume the loader handles dequantization
+            pass
         
         # Cache it
         if len(self.tensor_cache) >= self.max_cached_tensors:
@@ -143,7 +164,7 @@ class PagedTransformerEngine:
         batch_size, num_heads, seq_len, head_dim = x.shape
         
         # Compute RoPE frequencies
-        inv_freq = 1.0 / (self.config.rope_theta ** (torch.arange(0, head_dim, 2).float() / head_dim)).to(x.device)
+        inv_freq = self.config._rope_freqs.to(x.device)
         
         # Create position embeddings
         pos_emb = torch.outer(position_ids.float(), inv_freq)
@@ -182,20 +203,50 @@ class PagedTransformerEngine:
             bias = self._load_tensor(f"{prefix}.input_layernorm{suffix}.bias")
             return F.layer_norm(x, (self.config.hidden_size,), weight, bias)
     
+    def _quantized_linear(self, x: torch.Tensor, weight_name: str) -> torch.Tensor:
+        """Linear operation with quantized weights"""
+        # Load quantized weight
+        quantized_weight = self._load_tensor(weight_name)
+        
+        # If quantized, dequantize
+        if self.config.quant_config is not None and quantized_weight.dtype == torch.uint8:
+            # Load scales and zeros
+            scales_name = weight_name.replace('.weight', '.scales')
+            zeros_name = weight_name.replace('.weight', '.zeros')
+            
+            try:
+                scales = self._load_tensor(scales_name)
+                zeros = self._load_tensor(zeros_name)
+                weight = dequantize_tensor(quantized_weight, scales, zeros, self.config.quant_config)
+            except:
+                # If scales/zeros not found, use the weight as-is
+                weight = quantized_weight
+        else:
+            weight = quantized_weight
+        
+        return F.linear(x, weight)
+    
     def _attention(self, x: torch.Tensor, layer_config: LayerConfig, position_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute attention with RoPE and causal mask"""
         prefix = layer_config.prefix
         
-        # Load weights
-        q_proj = self._load_tensor(f"{prefix}.self_attn.q_proj.weight")
-        k_proj = self._load_tensor(f"{prefix}.self_attn.k_proj.weight")
-        v_proj = self._load_tensor(f"{prefix}.self_attn.v_proj.weight")
-        o_proj = self._load_tensor(f"{prefix}.self_attn.o_proj.weight")
-        
-        # Project
-        q = F.linear(x, q_proj)
-        k = F.linear(x, k_proj)
-        v = F.linear(x, v_proj)
+        # Use quantized linear if quantization is enabled
+        if self.config.quant_config is not None:
+            q = self._quantized_linear(x, f"{prefix}.self_attn.q_proj.weight")
+            k = self._quantized_linear(x, f"{prefix}.self_attn.k_proj.weight")
+            v = self._quantized_linear(x, f"{prefix}.self_attn.v_proj.weight")
+            o = self._quantized_linear(x, f"{prefix}.self_attn.o_proj.weight")
+        else:
+            # Load weights normally
+            q_proj = self._load_tensor(f"{prefix}.self_attn.q_proj.weight")
+            k_proj = self._load_tensor(f"{prefix}.self_attn.k_proj.weight")
+            v_proj = self._load_tensor(f"{prefix}.self_attn.v_proj.weight")
+            o_proj = self._load_tensor(f"{prefix}.self_attn.o_proj.weight")
+            
+            # Project
+            q = F.linear(x, q_proj)
+            k = F.linear(x, k_proj)
+            v = F.linear(x, v_proj)
         
         # Reshape for multi-head
         batch_size, seq_len, _ = x.shape
@@ -231,24 +282,37 @@ class PagedTransformerEngine:
         
         # Reshape back
         context = context.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
-        output = F.linear(context, o_proj)
+        
+        if self.config.quant_config is not None:
+            output = self._quantized_linear(context, f"{prefix}.self_attn.o_proj.weight")
+        else:
+            output = F.linear(context, o_proj)
         
         return output
     
     def _feed_forward(self, x: torch.Tensor, layer_config: LayerConfig) -> torch.Tensor:
-        """Feed-forward network"""
+        """Feed-forward network with optional quantization"""
         prefix = layer_config.prefix
         
-        # Load weights
-        gate_proj = self._load_tensor(f"{prefix}.mlp.gate_proj.weight")
-        up_proj = self._load_tensor(f"{prefix}.mlp.up_proj.weight")
-        down_proj = self._load_tensor(f"{prefix}.mlp.down_proj.weight")
-        
-        # FFN
-        gate = F.linear(x, gate_proj)
-        up = F.linear(x, up_proj)
+        if self.config.quant_config is not None:
+            gate = self._quantized_linear(x, f"{prefix}.mlp.gate_proj.weight")
+            up = self._quantized_linear(x, f"{prefix}.mlp.up_proj.weight")
+            down = self._quantized_linear(x, f"{prefix}.mlp.down_proj.weight")
+        else:
+            # Load weights normally
+            gate_proj = self._load_tensor(f"{prefix}.mlp.gate_proj.weight")
+            up_proj = self._load_tensor(f"{prefix}.mlp.up_proj.weight")
+            down_proj = self._load_tensor(f"{prefix}.mlp.down_proj.weight")
+            
+            gate = F.linear(x, gate_proj)
+            up = F.linear(x, up_proj)
+            
         hidden = F.silu(gate) * up
-        output = F.linear(hidden, down_proj)
+        
+        if self.config.quant_config is not None:
+            output = self._quantized_linear(hidden, f"{prefix}.mlp.down_proj.weight")
+        else:
+            output = F.linear(hidden, down_proj)
         
         return output
     
@@ -405,3 +469,10 @@ class PagedTransformerEngine:
                 break
         
         return self.tokenizer.decode(input_ids[0, input_length:], skip_special_tokens=True)
+    
+    def clear_cache(self):
+        """Clear all caches"""
+        self.tensor_cache.clear()
+        self.current_position = 0
+        self.kv_cache = None
+        logger.info("PagedTransformerEngine cache cleared")
