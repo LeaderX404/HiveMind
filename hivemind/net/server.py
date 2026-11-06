@@ -1,5 +1,6 @@
 import grpc
 from concurrent import futures
+import io
 import torch
 import zlib
 import pickle
@@ -55,8 +56,11 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
             # Decompress input data if needed
             input_data = self._decompress(request.input_data)
             
-            # Load input tensor
-            input_tensor = torch.load(input_data)
+            # Load input tensor. The decompressed payload is raw bytes;
+            # torch.load requires a seekable file-like object, so wrap it
+            # in io.BytesIO (passing bytes directly fails on modern torch
+            # with: "'bytes' object has no attribute 'seek'").
+            input_tensor = torch.load(io.BytesIO(input_data))
             
             # Process through shard layers
             x = input_tensor.to(self.device)
