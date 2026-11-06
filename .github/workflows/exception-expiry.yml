@@ -1,0 +1,96 @@
+name: Serialization Exception Expiry Scan
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  scan:
+    name: Scan serialization guard exceptions for expiry
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+    - name: Open reminder issue for expiring exceptions
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python - <<'EOF'
+        import datetime
+        import json
+        import os
+        import pathlib
+        import re
+        import urllib.request
+
+        REPO = "LeaderX404/HiveMind"
+        TOKEN = os.environ["GITHUB_TOKEN"]
+        MARKER = re.compile(
+            r"serialization-guard: allowed\s*#issue-(\d+)\s+expires=(\d{4}-\d{2}-\d{2})"
+        )
+        WARN_DAYS = 14
+        TODAY = datetime.date.today()
+
+        paths = []
+        for root in ("hivemind", "tests"):
+            paths.extend(pathlib.Path(root).rglob("*.py"))
+        bench = pathlib.Path("benchmark.py")
+        if bench.exists():
+            paths.append(bench)
+
+        expiring = []
+        for path in paths:
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                m = MARKER.search(line)
+                if not m:
+                    continue
+                exp = datetime.date.fromisoformat(m.group(2))
+                if (exp - TODAY).days <= WARN_DAYS:
+                    expiring.append(
+                        f"{path}:{lineno}: issue #{m.group(1)}, expires {m.group(2)}"
+                    )
+
+        if not expiring:
+            print(f"No exceptions expire within {WARN_DAYS} days.")
+            raise SystemExit(0)
+
+        title = "[exception-expiry] serialization guard exceptions need renewal"
+        body = (
+            "The following serialization-guard exceptions expire soon "
+            "or have expired:\n\n" + "\n".join("- " + e for e in expiring)
+        )
+
+        headers = {
+            "Authorization": f"token {TOKEN}",
+            "Accept": "application/vnd.github+json",
+        }
+        list_req = urllib.request.Request(
+            "https://api.github.com/repos/" + REPO + "/issues?state=open&per_page=100",
+            headers=headers,
+        )
+        with urllib.request.urlopen(list_req) as resp:
+            open_issues = json.load(resp)
+        if any(str(i.get("title", "")).startswith("[exception-expiry]") for i in open_issues):
+            print("An expiry reminder issue is already open; skipping.")
+            raise SystemExit(0)
+
+        payload = json.dumps(
+            {"title": title, "body": body, "labels": ["security-exception"]}
+        ).encode()
+        req = urllib.request.Request(
+            "https://api.github.com/repos/" + REPO + "/issues",
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        urllib.request.urlopen(req)
+        print("Opened expiry reminder issue.")
+        EOF
