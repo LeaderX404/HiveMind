@@ -1,0 +1,138 @@
+"""
+Direct File Model Loader for Out-of-Core Inference
+Loads model tensors directly from GGUF/Safetensors files WITHOUT loading full model into RAM.
+This is the TRUE out-of-core solution.
+"""
+import torch
+from pathlib import Path
+from typing import Dict, Any, Optional
+from hivemind.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class DirectFileModelLoader:
+    """
+    Load model tensors directly from GGUF/Safetensors files.
+    NEVER loads the entire model into RAM at once.
+    """
+    
+    def __init__(self, 
+                 model_path: str,
+                 device: str = "cpu"):
+        """
+        Initialize direct file model loader.
+        
+        Args:
+            model_path: Path to GGUF or Safetensors file
+            device: Device to use (cpu or cuda)
+        """
+        self.model_path = Path(model_path)
+        self.device = device
+        self.model_info = self._load_model_info()
+        self.tensor_infos = self._extract_tensor_infos()
+        
+        logger.info(f"DirectFileModelLoader initialized for {model_path}")
+        logger.info(f"  Format: {self.model_info.get('format', 'unknown')}")
+        logger.info(f"  Tensors: {len(self.tensor_infos)}")
+    
+    def _load_model_info(self) -> Dict[str, Any]:
+        """Load model metadata without loading weights"""
+        if self.model_path.suffix == '.gguf':
+            return self._load_gguf_info()
+        elif self.model_path.suffix == '.safetensors':
+            return self._load_safetensors_info()
+        else:
+            raise ValueError(f"Unsupported format: {self.model_path.suffix}")
+    
+    def _load_gguf_info(self) -> Dict[str, Any]:
+        """Load GGUF metadata"""
+        try:
+            from gguf import GGUFReader
+            with GGUFReader(self.model_path) as reader:
+                return {
+                    'format': 'gguf',
+                    'tensors': list(reader.tensors.keys()),
+                    'metadata': dict(reader.metadata)
+                }
+        except ImportError:
+            raise ImportError("gguf-py required. Install: pip install gguf-py")
+    
+    def _load_safetensors_info(self) -> Dict[str, Any]:
+        """Load Safetensors metadata"""
+        from safetensors import safe_open
+        with safe_open(self.model_path, framework="pt") as f:
+            return {
+                'format': 'safetensors',
+                'tensors': list(f.keys())
+            }
+    
+    def _extract_tensor_infos(self) -> Dict[str, Dict[str, Any]]:
+        """Extract info about all tensors"""
+        infos = {}
+        
+        if self.model_info['format'] == 'gguf':
+            from gguf import GGUFReader
+            with GGUFReader(self.model_path) as reader:
+                for name, tensor in reader.tensors.items():
+                    infos[name] = {
+                        'shape': tuple(tensor.shape),
+                        'dtype': str(tensor.dtype),
+                        'size': tensor.nbytes()
+                    }
+        elif self.model_info['format'] == 'safetensors':
+            from safetensors import safe_open
+            with safe_open(self.model_path, framework="pt") as f:
+                for name in f.keys():
+                    tensor = f.get_tensor(name)
+                    infos[name] = {
+                        'shape': tuple(tensor.shape),
+                        'dtype': str(tensor.dtype),
+                        'size': tensor.numel() * tensor.element_size()
+                    }
+        
+        return infos
+    
+    def load_tensor(self, tensor_name: str) -> torch.Tensor:
+        """
+        Load a single tensor from file WITHOUT loading entire model.
+        This is the CORE of out-of-core inference.
+        """
+        if tensor_name not in self.tensor_infos:
+            raise ValueError(f"Tensor {tensor_name} not found")
+        
+        if self.model_info['format'] == 'gguf':
+            return self._load_gguf_tensor(tensor_name)
+        elif self.model_info['format'] == 'safetensors':
+            return self._load_safetensors_tensor(tensor_name)
+    
+    def _load_gguf_tensor(self, tensor_name: str) -> torch.Tensor:
+        """Load tensor from GGUF file"""
+        from gguf import GGUFReader
+        with GGUFReader(self.model_path) as reader:
+            tensor = reader.get_tensor(tensor_name)
+            return torch.tensor(tensor, dtype=self._gguf_to_torch_dtype(tensor.dtype))
+    
+    def _gguf_to_torch_dtype(self, dtype_str: str) -> torch.dtype:
+        """Convert GGUF dtype to PyTorch dtype"""
+        mapping = {
+            'F32': torch.float32, 'F16': torch.float16, 'BF16': torch.bfloat16,
+            'I8': torch.int8, 'I16': torch.int16, 'I32': torch.int32,
+            'Q4_0': torch.uint8, 'Q4_1': torch.uint8, 'Q5_0': torch.uint8,
+            'Q5_1': torch.uint8, 'Q8_0': torch.uint8
+        }
+        return mapping.get(dtype_str, torch.float32)
+    
+    def _load_safetensors_tensor(self, tensor_name: str) -> torch.Tensor:
+        """Load tensor from Safetensors file"""
+        from safetensors import safe_open
+        with safe_open(self.model_path, framework="pt") as f:
+            return f.get_tensor(tensor_name)
+    
+    def get_tensor_info(self, tensor_name: str) -> Dict[str, Any]:
+        """Get info about a tensor"""
+        return self.tensor_infos.get(tensor_name, {})
+    
+    def list_tensors(self) -> list:
+        """List all tensor names"""
+        return list(self.tensor_infos.keys())
