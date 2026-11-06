@@ -42,6 +42,16 @@ both, never "inconclusive but favorable". A commander who sets
 the withdrawal line after seeing the battle is not testing a
 thesis; he is shopping for a justification.
 
+PRE-REGISTERED COVENANT (full text: PRE_REGISTERED.md, verified
+against seal/THRESHOLDS.sha256 by CI on every push):
+
+- The anchor verdict is reported across a tolerance sweep
+  (ANCHOR_TOLERANCE_SWEEP), never at a single point.
+- No claim may exceed ANCHOR_EXTRAPOLATION_CAP times the
+  anchored size: no anchor, no summit talk.
+- CORRECTION_FACTOR = FORBIDDEN: the anchor is a question,
+  never a calibration knob.
+
 Usage:
   python benchmark.py --stage 1 --model-gb 0.2 --shards 1 --tokens 32
   python benchmark.py --stage 2 --model-gb 0.6 --shards 3 --tokens 32
@@ -80,6 +90,16 @@ SCALING_EFFICIENCY_FLOOR = 0.65
 COORDINATION_TAX_CEILING = 0.40
 MIN_INTERACTIVE_TPS = 1.0
 NETEM_LATENCY_POINTS_MS = [5, 10, 20, 50]
+
+# ------------------------------------------------------------------
+# Anchor calibration policy (see PRE_REGISTERED.md, hash-sealed).
+# A single tolerance of 0.25 was rejected: no decision could be
+# named that flips at 26% but not at 24%. Verdicts are therefore
+# reported across a tolerance sweep, never at one point.
+# ------------------------------------------------------------------
+ANCHOR_TOLERANCE_SWEEP = [0.05, 0.10, 0.25, 0.50]
+ANCHOR_EXTRAPOLATION_CAP = 2.0
+CORRECTION_FACTOR = "FORBIDDEN"
 
 
 class MockContext:
@@ -328,8 +348,53 @@ def run_sweep(stage_runner, sizes_gb: List[float], tokens: int,
     return {"sweep": results, "max_model_gb_at_1tps": max_running}
 
 
-def apply_verdict(single_path: str, swarm_path: str) -> dict:
-    """Print the pre-registered verdict from two sweep reports."""
+def anchor_verdict(synthetic_tax: float, real_tax: float) -> dict:
+    """Report the anchor verdict across the tolerance sweep.
+
+    A single tolerance would be one more movable withdrawal line.
+    The sweep shows the reader exactly where the conclusion is
+    fragile, instead of asking them to trust one number.
+    """
+    if real_tax > 0:
+        rel_gap = abs(synthetic_tax - real_tax) / real_tax
+    else:
+        rel_gap = float("inf")
+    rows = []
+    verdicts = set()
+    for tol in ANCHOR_TOLERANCE_SWEEP:
+        ok = rel_gap <= tol
+        verdicts.add(ok)
+        rows.append({"tolerance": tol, "relative_gap": rel_gap, "pass": ok})
+    print("\n=== ANCHOR CALIBRATION VERDICT (tolerance sweep) ===")
+    for r in rows:
+        ok = "PASS" if r["pass"] else "FAIL"
+        print(f"  tolerance {r['tolerance']:.2f}: relative gap {r['relative_gap']:.3f} -> {ok}")
+    uniform = len(verdicts) == 1
+    if uniform:
+        word = "calibrated" if True in verdicts else "uncalibrated"
+        print(f"\n  VERDICT: UNIFORM ({word}) across the sweep")
+    else:
+        fragile = max(r["tolerance"] for r in rows if not r["pass"])
+        print(f"\n  VERDICT: FRAGILE - conclusion flips at tolerance {fragile}")
+    print("  CORRECTION_FACTOR = FORBIDDEN: the synthetic is never fitted to the real")
+    return {"relative_gap": rel_gap, "rows": rows, "uniform": uniform}
+
+
+def apply_verdict(single_path: str, swarm_path: str,
+                  anchor_gb=None, claim_gb=None) -> dict:
+    """Print the pre-registered verdict from two sweep reports.
+
+    If the claimed size exceeds ANCHOR_EXTRAPOLATION_CAP times
+    the anchored size, the verdict is withheld: no anchor, no
+    summit talk.
+    """
+    if anchor_gb and claim_gb and claim_gb > anchor_gb * ANCHOR_EXTRAPOLATION_CAP:
+        print(
+            f"VERDICT WITHHELD: claim {claim_gb} GB exceeds "
+            f"{ANCHOR_EXTRAPOLATION_CAP}x anchor {anchor_gb} GB "
+            "(extrapolation cap; run a second anchor)"
+        )
+        return {"holds": False, "verdict": "VERDICT WITHHELD (EXTRAPOLATION CAP)"}
     with open(single_path) as f:
         single = json.load(f)
     with open(swarm_path) as f:
@@ -407,12 +472,27 @@ def main():
     parser.add_argument("--apply-netem", action="store_true")
     parser.add_argument("--report", type=str, default="")
     parser.add_argument("--auth-token", type=str, default=None)
+    parser.add_argument("--anchor", nargs=2, type=float,
+                        metavar=("SYNTHETIC_TAX", "REAL_TAX"),
+                        help="anchor calibration verdict across the tolerance sweep")
+    parser.add_argument("--anchor-model-gb", type=float, default=None,
+                        help="largest size with a real-model anchor run")
+    parser.add_argument("--claim-model-gb", type=float, default=None,
+                        help="claimed swarm model size for the verdict")
     parser.add_argument("--verdict", nargs=2,
                         metavar=("SINGLE_JSON", "SWARM_JSON"))
     args = parser.parse_args()
 
+    if args.anchor:
+        anchor_verdict(args.anchor[0], args.anchor[1])
+        return
+
     if args.verdict:
-        apply_verdict(args.verdict[0], args.verdict[1])
+        apply_verdict(
+            args.verdict[0], args.verdict[1],
+            anchor_gb=args.anchor_model_gb,
+            claim_gb=args.claim_model_gb,
+        )
         return
 
     if args.serve:
