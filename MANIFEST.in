@@ -1,0 +1,5 @@
+# Files required at build time that setuptools does not include
+# automatically. setup.py reads requirements.txt during the build, so
+# it must ship inside the sdist or wheel-from-sdist builds fail.
+include README.md
+include requirements.txt
