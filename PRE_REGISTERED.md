@@ -25,13 +25,40 @@ recompute the hash and compare against the published stamp.
 
 Verdict: THESIS HOLDS / THESIS REFUTED. Never edited after data.
 
-## 2. Kill gate before any summit talk
+## 2. The two gates before any summit talk (strict order)
 
-Two-shard gate: a real model that runs on one device at >= 1 TPS
-must run on two devices at >= 1.5x the model size per dollar at
-the same TPS. If the gate fails, the thesis is dead and no work
-on 50B/100B is justified. Cost: about one week. This gate runs
-first; benchmark.py stages are isolation tools, not a substitute.
+Gate order: OVERFLOW first, then TWO-SHARD. Measuring the tax
+of a swarm that cannot run at all is propaganda, not
+measurement. Both gates are carved as constants in benchmark.py
+before their first run; editing them after data is the same
+crime as editing the thresholds.
+
+### Gate 1 - Overflow gate (the heart of the thesis)
+
+Tests the heart: running a model that no single device can
+hold.
+
+- At least MIN_DEVICES (3) devices, none able to hold the
+  model alone.
+- A real 4-bit MoE whose total size exceeds one device memory
+  (DEVICE_MEMORY_GB = 8) but fits the aggregate.
+- Each shard must stay within PER_SHARD_BUDGET_GB (6).
+- The gate passes only if generation completes with at least
+  MIN_COMPLETION_TOKENS (16) tokens.
+
+Verdict: OVERFLOW_GATE_PASS / OVERFLOW_GATE_FAIL, printed by
+benchmark.py --gate overflow from recorded run facts. A fail
+kills the thesis before any anchor or tax work.
+
+### Gate 2 - Two-shard gate (the tax floor)
+
+A real model that runs on one device at >= 1 TPS must run on
+two devices at >= 1.5x the model size per dollar at the same
+TPS. A fail kills the thesis. Cost: about one week.
+
+No talk about 100B before BOTH gates pass, in this order.
+Amendment record: issue #22 (opened before the first run; no
+measurements existed, so no runs were invalidated).
 
 ## 3. Anchor calibration policy
 
@@ -77,3 +104,4 @@ way to move a withdrawal line after the data.
 Any edit to this covenant invalidates all prior runs, requires a
 new seal, and an open issue announcing the invalidation - the
 same social pricing as serialization guard exceptions.
+
