@@ -7,4 +7,3 @@ from .pager import ModelPager, PagedModel, DiskCache, LRUCache, MemoryMonitor
 from .direct_loader import DirectFileModelLoader
 from .file_pager import FileBackedPager
 from .transformer_engine import PagedTransformerEngine, TransformerConfig, LayerConfig
-from .quant_utils import QuantizationConfig
