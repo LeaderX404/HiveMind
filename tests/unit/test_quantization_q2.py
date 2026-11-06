@@ -202,5 +202,10 @@ class TestDynamicQuantizerPhase3:
 
     def test_prefers_higher_bits_when_memory_allows(self):
         dynamic = DynamicQuantizer(min_bits=2, max_bits=8)
-        # 100GB model with 64GB available: Q4 fits
-        assert dynamic.get_optimal_bits(64.0, 100.0) == 4
+        # 100GB model with 20GB available: 8-bit needs 25GB, Q4 needs 12.5GB
+        assert dynamic.get_optimal_bits(20.0, 100.0) == 4
+
+    def test_picks_8bit_when_memory_plentiful(self):
+        dynamic = DynamicQuantizer(min_bits=2, max_bits=8)
+        # Same 100GB model with 64GB available: even 8-bit (25GB) fits
+        assert dynamic.get_optimal_bits(64.0, 100.0) == 8
