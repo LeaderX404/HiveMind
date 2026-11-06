@@ -6,7 +6,11 @@ import torch
 
 from hivemind.core.file_pager import compute_optimal_page_size_mb
 from hivemind.core.quantizer import DynamicQuantizer
-from hivemind.core.transformer_engine import LARGE_MODEL_PRESETS, TransformerConfig
+from hivemind.core.transformer_engine import (
+    LARGE_MODEL_PRESETS,
+    PagedTransformerEngine,
+    TransformerConfig,
+)
 from hivemind.utils.quant_utils import (
     QuantizationConfig,
     dequantize_model_state_dict,
@@ -130,9 +134,6 @@ class TestEngineQuantizedLinear:
             vocab_size=100,
             quant_bits=2,
         )
-        engine = TransformerConfig.__new__(TransformerConfig)  # placeholder, replaced below
-        from hivemind.core.transformer_engine import PagedTransformerEngine
-
         engine = PagedTransformerEngine(
             file_pager=pager, tokenizer=object(), config=engine_config, device="cpu"
         )
