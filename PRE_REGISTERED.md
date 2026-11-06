@@ -1,0 +1,79 @@
+# Pre-Registered Experimental Covenant - HiveMind Swarm Thesis
+
+This file is the withdrawal line of the swarm experiment. Its
+SHA-256 is recorded in seal/THRESHOLDS.sha256 and verified by CI
+on every push. Editing this file without resealing breaks the
+build loudly and in public.
+
+External seal (the witness that does not trust the author):
+
+    pip install opentimestamps-client
+    ots stamp seal/THRESHOLDS.sha256
+
+Commit the resulting .ots proof once Bitcoin confirms it. The
+repo hash is the tripwire; the external timestamp is the witness.
+Rewriting git history rewrites both files together, but it
+cannot rewrite Bitcoin. Any third party (or CI on any fork) can
+recompute the hash and compare against the published stamp.
+
+## 1. Swarm thresholds (frozen before first measurement)
+
+- SWARM_ADVANTAGE_FLOOR    = 1.5   (model size per dollar at >= 1 TPS)
+- SCALING_EFFICIENCY_FLOOR = 0.65  (per-device share of standalone TPS)
+- COORDINATION_TAX_CEILING = 0.40  (wait / compute)
+- MIN_INTERACTIVE_TPS      = 1.0   (the definition of "it runs")
+
+Verdict: THESIS HOLDS / THESIS REFUTED. Never edited after data.
+
+## 2. Kill gate before any summit talk
+
+Two-shard gate: a real model that runs on one device at >= 1 TPS
+must run on two devices at >= 1.5x the model size per dollar at
+the same TPS. If the gate fails, the thesis is dead and no work
+on 50B/100B is justified. Cost: about one week. This gate runs
+first; benchmark.py stages are isolation tools, not a substitute.
+
+## 3. Anchor calibration policy
+
+- ANCHOR_TOLERANCE_SWEEP = [0.05, 0.10, 0.25, 0.50]. The verdict
+  is reported as a function of tolerance. A single tolerance was
+  rejected: 0.25 could not be tied to a decision that flips at
+  26% but not at 24%, so it is declared provisional and swept
+  until a deployment decision is defined and a threshold can be
+  derived from it.
+- ANCHOR_EXTRAPOLATION_CAP = 2.0. No claim may exceed twice the
+  anchored size without a second anchor.
+- CORRECTION_FACTOR = FORBIDDEN. The anchor is a test, never a
+  training signal. Fitting the synthetic tax to the real tax
+  turns the anchor into part of the model and voids it as
+  evidence.
+
+## 4. Anchor ladder to 100B (ammo count, written before the battle)
+
+| Anchor | Est. effort  | Earns the right to claim |
+|--------|--------------|--------------------------|
+| 8B     | ~1 week      | up to 16B                |
+| 16B    | 1-2 weeks    | up to 32B                |
+| 32B    | 2-4 weeks    | up to 64B                |
+| 64B    | 1-2 months   | up to 128B               |
+
+Total: 6-9 months of real anchors before any claim about 100B.
+Whoever is surprised by this count in the middle of the road
+will be tempted to drop the cap; that temptation is the third
+way to move a withdrawal line after the data.
+
+## 5. Trace-replay: two declared layers
+
+- Content layer (captured, real): per-layer expert selection and
+  token counts from a real MoE run on one device.
+- Size layer (derived, from a declared placement map): message
+  sizes are the aggregation over shards, not per expert.
+- Timing layer (modeled, declared as modeling): arrival times
+  are generated from measured RTT distributions and compute
+  variance, and swept. Never claimed as captured.
+
+## 6. Amendment rule
+
+Any edit to this covenant invalidates all prior runs, requires a
+new seal, and an open issue announcing the invalidation - the
+same social pricing as serialization guard exceptions.
