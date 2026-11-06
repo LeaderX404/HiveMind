@@ -40,6 +40,23 @@ _ALLOWED_DTYPES = {
     "bool": torch.bool,
 }
 
+# Byte width per allowed dtype. Kept as an explicit table (not
+# torch.dtype.element_size, which only exists on tensor instances)
+# because the deserializer validates the payload byte length
+# against it: the table itself is part of the security boundary.
+_DTYPE_ITEM_SIZES = {
+    "float64": 8,
+    "float32": 4,
+    "float16": 2,
+    "bfloat16": 2,
+    "int64": 8,
+    "int32": 4,
+    "int16": 2,
+    "int8": 1,
+    "uint8": 1,
+    "bool": 1,
+}
+
 
 def _dtype_name(tensor: torch.Tensor) -> str:
     """Return the bare dtype name, e.g. 'float32' for torch.float32."""
@@ -88,12 +105,16 @@ def deserialize_tensor(payload: bytes) -> torch.Tensor:
     if dtype_name not in _ALLOWED_DTYPES:
         raise ValueError(f"payload rejected: dtype {dtype_name!r} is not allowed")
     dtype = _ALLOWED_DTYPES[dtype_name]
+    if dtype_name not in _DTYPE_ITEM_SIZES:
+        raise ValueError(f"payload rejected: dtype {dtype_name!r} has no size entry")
     
     raw = payload[header_end:]
     numel = 1
     for dim in shape:
         numel *= dim
-    if numel * dtype.element_size() != len(raw):
+    # numel can go negative with attacker-crafted negative dims;
+    # a negative product can never equal a non-negative byte count.
+    if numel * _DTYPE_ITEM_SIZES[dtype_name] != len(raw):
         raise ValueError(
             "payload rejected: byte length does not match shape/dtype"
         )
