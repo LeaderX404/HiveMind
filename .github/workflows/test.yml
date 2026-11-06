@@ -105,6 +105,33 @@ jobs:
       run: |
         mypy hivemind/ --ignore-missing-imports --python-version 3.8
 
+  security:
+    name: Security Audit (advisory)
+    runs-on: ubuntu-latest
+    # Known-vulnerable dependencies must be visible, not invisible:
+    # the job reports findings without blocking merges. Fix findings
+    # by raising version floors in requirements.txt (note: Python 3.8
+    # caps torch at 2.4.1, which cannot receive the CVE-2025-32434 /
+    # PYSEC-2026-2286 fixes - dropping 3.8 is the structural fix).
+    continue-on-error: true
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    
+    - name: Install pip-audit
+      run: |
+        pip install pip-audit
+    
+    - name: Audit dependencies for known vulnerabilities
+      run: |
+        pip-audit -r requirements.txt
+
   build:
     name: Build Package
     runs-on: ubuntu-latest
