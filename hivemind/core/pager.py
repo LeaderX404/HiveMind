@@ -5,17 +5,31 @@ model layers from disk on demand.
 
 This is the core of HiveMind v2.0 - the real solution for running
 7B+ models on devices with 16GB RAM or less.
+
+Disk pages use a pickle-free container (HMP2): a JSON manifest
+describing the layers and keys, followed by concatenated safe
+tensor containers (see hivemind/net/serialization.py). Pages are
+only ever read as bytes; nothing stored on disk is executed.
 """
 import torch
 import os
-import pickle
+import json
+import struct
 import hashlib
 from pathlib import Path
 from collections import OrderedDict
 from typing import List, Tuple, Dict, Optional, Any
+from hivemind.net.serialization import serialize_tensor, deserialize_tensor
 from hivemind.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Pickle-free page container: 4B magic "HMP2", 4B manifest length
+# (little-endian), JSON manifest, then concatenated safe tensor
+# containers. Mirrors the HMT1 wire format philosophy: data on
+# disk is bytes to be read, never code to be executed.
+_PAGE_MAGIC = b"HMP2"
+_PAGE_HEADER = struct.Struct("<4sI")
 
 
 class DiskCache:
@@ -38,14 +52,14 @@ class DiskCache:
         self._page_hashes = {}
     
     def _get_filename(self, page_index: int, layers: List[Tuple[str, Any]]) -> str:
-        """Generate filename for a page"""
+        """Generate filename for a page (pickle-free .hmp container)"""
         if self.use_hash:
             # Create hash of layer names for consistent filename
             layer_names = "|".join(name for name, _ in layers)
             page_hash = hashlib.md5(layer_names.encode()).hexdigest()[:8]
-            return f"page_{page_index}_{page_hash}.pkl"
+            return f"page_{page_index}_{page_hash}.hmp"
         else:
-            return f"page_{page_index}.pkl"
+            return f"page_{page_index}.hmp"
     
     def save_page(self, page_index: int, layers: List[Tuple[str, Any]]) -> Path:
         """
@@ -61,19 +75,29 @@ class DiskCache:
         filename = self._get_filename(page_index, layers)
         page_path = self.cache_dir / filename
         
-        # Save layer states (parameters)
-        page_data = []
+        # Build a pickle-free page container: a JSON manifest
+        # describing every layer and key, followed by concatenated
+        # safe tensor containers. Nothing on disk is ever executed.
+        meta = {"version": 2, "entries": []}
+        blob = bytearray()
         for name, layer in layers:
-            layer_state = {
-                'name': name,
-                'state_dict': {k: v.cpu() for k, v in layer.state_dict().items()},
-                'class': layer.__class__.__name__,
-                'module': layer.__class__.__module__
+            entry = {
+                "name": name,
+                "class": layer.__class__.__name__,
+                "module": layer.__class__.__module__,
+                "keys": [],
             }
-            page_data.append(layer_state)
+            for key, value in layer.state_dict().items():
+                wire = serialize_tensor(value.cpu())
+                entry["keys"].append({"key": key, "bytes": len(wire)})
+                blob.extend(wire)
+            meta["entries"].append(entry)
         
+        meta_bytes = json.dumps(meta).encode("utf-8")
         with open(page_path, "wb") as f:
-            pickle.dump(page_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+            f.write(_PAGE_HEADER.pack(_PAGE_MAGIC, len(meta_bytes)))
+            f.write(meta_bytes)
+            f.write(bytes(blob))
         
         logger.debug(f"Saved page {page_index} to {page_path}")
         return page_path
@@ -96,13 +120,43 @@ class DiskCache:
             raise FileNotFoundError(f"Page {page_index} not found at {page_path}")
         
         with open(page_path, "rb") as f:
-            page_data = pickle.load(f)
+            raw = f.read()
+        
+        # Parse the pickle-free page container. Any malformed page
+        # is rejected with a ValueError: page bytes are read, never
+        # executed (legacy pickle pages fail the magic check).
+        if len(raw) < _PAGE_HEADER.size:
+            raise ValueError("page rejected: too short to be a page container")
+        magic, meta_len = _PAGE_HEADER.unpack_from(raw, 0)
+        if magic != _PAGE_MAGIC:
+            raise ValueError(
+                "page rejected: not a HiveMind page container; "
+                "legacy pickle pages are no longer accepted"
+            )
+        manifest_start = _PAGE_HEADER.size
+        manifest_end = manifest_start + meta_len
+        if manifest_end > len(raw):
+            raise ValueError("page rejected: truncated manifest")
+        try:
+            meta = json.loads(raw[manifest_start:manifest_end].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise ValueError(f"page rejected: malformed manifest: {e}")
+        
+        offset = manifest_end
         
         # Reconstruct layers with loaded parameters
         loaded_layers = []
-        for layer_state in page_data:
-            layer_name = layer_state['name']
-            state_dict = layer_state['state_dict']
+        for entry in meta["entries"]:
+            layer_name = entry["name"]
+            state_dict = {}
+            for key_meta in entry["keys"]:
+                size = int(key_meta["bytes"])
+                if size < 0 or offset + size > len(raw):
+                    raise ValueError("page rejected: truncated tensor data")
+                state_dict[key_meta["key"]] = deserialize_tensor(
+                    raw[offset:offset + size]
+                )
+                offset += size
             
             # Find the corresponding layer in the original model
             for name, layer in layers:
@@ -116,16 +170,20 @@ class DiskCache:
         return loaded_layers
     
     def clear(self):
-        """Clear all cached pages"""
-        for page_file in self.cache_dir.glob("page_*.pkl"):
-            page_file.unlink()
-        logger.info(f"Cleared {len(list(self.cache_dir.glob('page_*.pkl')))} cached pages")
+        """Clear all cached pages (current .hmp and legacy .pkl files)"""
+        count = 0
+        for pattern in ("page_*.hmp", "page_*.pkl"):
+            for page_file in self.cache_dir.glob(pattern):
+                page_file.unlink()
+                count += 1
+        logger.info(f"Cleared {count} cached pages")
     
     def get_cache_size(self) -> float:
         """Get total cache size in MB"""
         total_size = 0
-        for page_file in self.cache_dir.glob("page_*.pkl"):
-            total_size += page_file.stat().st_size
+        for pattern in ("page_*.hmp", "page_*.pkl"):
+            for page_file in self.cache_dir.glob(pattern):
+                total_size += page_file.stat().st_size
         return total_size / (1024 * 1024)
 
 
@@ -423,7 +481,7 @@ class PagedModel:
             # Free this page
             self.ram_cache.remove(oldest_index)
             needed -= oldest_size
-            logger.debug(f"Freed page {oldest_index} ({oldest_size:.1f}MB)")
+            logger.debug(f"Freed page {oldest_index} ({oldest_size:.1f}MB")
     
     def get_layer(self, layer_name: str) -> torch.nn.Module:
         """
