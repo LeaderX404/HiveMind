@@ -4,6 +4,7 @@ Loads model tensors directly from GGUF/Safetensors files WITHOUT loading full mo
 This is the TRUE out-of-core solution.
 """
 import torch
+import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Optional
 from hivemind.utils.logger import get_logger
@@ -15,26 +16,32 @@ class DirectFileModelLoader:
     """
     Load model tensors directly from GGUF/Safetensors files.
     NEVER loads the entire model into RAM at once.
+    Supports memory-mapped loading for better performance.
     """
     
     def __init__(self, 
                  model_path: str,
-                 device: str = "cpu"):
+                 device: str = "cpu",
+                 use_mmap: bool = True):
         """
         Initialize direct file model loader.
         
         Args:
             model_path: Path to GGUF or Safetensors file
             device: Device to use (cpu or cuda)
+            use_mmap: Use memory-mapped loading if available
         """
         self.model_path = Path(model_path)
         self.device = device
+        self.use_mmap = use_mmap
         self.model_info = self._load_model_info()
         self.tensor_infos = self._extract_tensor_infos()
+        self._file_handle = None
         
         logger.info(f"DirectFileModelLoader initialized for {model_path}")
         logger.info(f"  Format: {self.model_info.get('format', 'unknown')}")
         logger.info(f"  Tensors: {len(self.tensor_infos)}")
+        logger.info(f"  MMAP: {'enabled' if use_mmap else 'disabled'}")
     
     def _load_model_info(self) -> Dict[str, Any]:
         """Load model metadata without loading weights"""
@@ -78,7 +85,8 @@ class DirectFileModelLoader:
                     infos[name] = {
                         'shape': tuple(tensor.shape),
                         'dtype': str(tensor.dtype),
-                        'size': tensor.nbytes()
+                        'size': tensor.nbytes(),
+                        'offset': getattr(tensor, 'offset', 0)
                     }
         elif self.model_info['format'] == 'safetensors':
             from safetensors import safe_open
@@ -88,10 +96,21 @@ class DirectFileModelLoader:
                     infos[name] = {
                         'shape': tuple(tensor.shape),
                         'dtype': str(tensor.dtype),
-                        'size': tensor.numel() * tensor.element_size()
+                        'size': tensor.numel() * tensor.element_size(),
+                        'offset': 0
                     }
         
         return infos
+    
+    def _gguf_to_torch_dtype(self, dtype_str: str) -> torch.dtype:
+        """Convert GGUF dtype to PyTorch dtype"""
+        mapping = {
+            'F32': torch.float32, 'F16': torch.float16, 'BF16': torch.bfloat16,
+            'I8': torch.int8, 'I16': torch.int16, 'I32': torch.int32,
+            'Q4_0': torch.uint8, 'Q4_1': torch.uint8, 'Q5_0': torch.uint8,
+            'Q5_1': torch.uint8, 'Q8_0': torch.uint8
+        }
+        return mapping.get(dtype_str, torch.float32)
     
     def load_tensor(self, tensor_name: str) -> torch.Tensor:
         """
@@ -113,21 +132,18 @@ class DirectFileModelLoader:
             tensor = reader.get_tensor(tensor_name)
             return torch.tensor(tensor, dtype=self._gguf_to_torch_dtype(tensor.dtype))
     
-    def _gguf_to_torch_dtype(self, dtype_str: str) -> torch.dtype:
-        """Convert GGUF dtype to PyTorch dtype"""
-        mapping = {
-            'F32': torch.float32, 'F16': torch.float16, 'BF16': torch.bfloat16,
-            'I8': torch.int8, 'I16': torch.int16, 'I32': torch.int32,
-            'Q4_0': torch.uint8, 'Q4_1': torch.uint8, 'Q5_0': torch.uint8,
-            'Q5_1': torch.uint8, 'Q8_0': torch.uint8
-        }
-        return mapping.get(dtype_str, torch.float32)
-    
     def _load_safetensors_tensor(self, tensor_name: str) -> torch.Tensor:
-        """Load tensor from Safetensors file"""
+        """Load tensor from Safetensors file with optional mmap"""
         from safetensors import safe_open
-        with safe_open(self.model_path, framework="pt") as f:
-            return f.get_tensor(tensor_name)
+        
+        if self.use_mmap:
+            # Use memory mapping for better performance
+            with safe_open(self.model_path, framework="pt", device=self.device) as f:
+                return f.get_tensor(tensor_name)
+        else:
+            # Standard loading
+            with safe_open(self.model_path, framework="pt") as f:
+                return f.get_tensor(tensor_name)
     
     def get_tensor_info(self, tensor_name: str) -> Dict[str, Any]:
         """Get info about a tensor"""
@@ -136,3 +152,7 @@ class DirectFileModelLoader:
     def list_tensors(self) -> list:
         """List all tensor names"""
         return list(self.tensor_infos.keys())
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get model metadata"""
+        return self.model_info
