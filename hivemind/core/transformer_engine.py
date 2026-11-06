@@ -2,6 +2,7 @@
 Paged Transformer Engine for Out-of-Core Inference
 Implements full transformer forward pass with paging.
 Supports: RoPE, RMSNorm, Causal Mask, KV Cache, GQA, Q4/Q8 Quantization
+Phase 2: Added batch processing for 10B+ models
 """
 import math
 import torch
@@ -89,7 +90,8 @@ class PagedTransformerEngine:
                  file_pager: 'FileBackedPager',
                  tokenizer: Any,
                  config: TransformerConfig,
-                 device: str = "cpu"):
+                 device: str = "cpu",
+                 batch_size: int = 1):
         """
         Initialize paged transformer engine.
         
@@ -98,11 +100,13 @@ class PagedTransformerEngine:
             tokenizer: Tokenizer
             config: Transformer configuration
             device: Device to use
+            batch_size: Batch size for generation (Phase 2 feature)
         """
         self.file_pager = file_pager
         self.tokenizer = tokenizer
         self.config = config
         self.device = device
+        self.batch_size = batch_size
         
         # Create layer configs
         self.layer_configs = []
@@ -130,7 +134,7 @@ class PagedTransformerEngine:
         # Position tracking for RoPE
         self.current_position = 0
         
-        logger.info(f"PagedTransformerEngine initialized: {config.num_layers} layers, {config.model_type} config")
+        logger.info(f"PagedTransformerEngine initialized: {config.num_layers} layers, {config.model_type} config, batch_size={batch_size}")
         if config.quant_bits:
             logger.info(f"Quantization: {config.quant_bits}-bit enabled")
     
@@ -469,6 +473,119 @@ class PagedTransformerEngine:
                 break
         
         return self.tokenizer.decode(input_ids[0, input_length:], skip_special_tokens=True)
+    
+    def batch_generate(self, prompts: List[str], max_new_tokens: int = 50,
+                       temperature: float = 0.7, top_p: float = 0.9, top_k: int = 50) -> List[str]:
+        """
+        Batch generation for multiple prompts (Phase 2 feature)
+        More efficient than individual generation for 10B+ models
+        """
+        # Tokenize all prompts
+        input_ids_list = []
+        for prompt in prompts:
+            input_ids = self.tokenizer.encode(prompt, return_tensors="pt").to(self.device)
+            input_ids_list.append(input_ids)
+        
+        # Pad to same length
+        max_length = max(ids.size(1) for ids in input_ids_list)
+        padded_input_ids = []
+        for ids in input_ids_list:
+            pad_size = max_length - ids.size(1)
+            if pad_size > 0:
+                pad_token = torch.full((1, pad_size), self.tokenizer.pad_token_id, device=self.device)
+                padded_ids = torch.cat([ids, pad_token], dim=1)
+            else:
+                padded_ids = ids
+            padded_input_ids.append(padded_ids)
+        
+        # Stack into batch
+        batch_input_ids = torch.cat(padded_input_ids, dim=0)
+        
+        # Reset position counter
+        self.current_position = 0
+        
+        # Pre-allocate KV cache for batch
+        if self.kv_cache is None:
+            self._initialize_kv_cache(batch_input_ids.size(0))
+        
+        # Generate for each token position
+        all_outputs = [[] for _ in range(len(prompts))]
+        input_lengths = [ids.size(1) for ids in input_ids_list]
+        
+        for step in range(max_new_tokens):
+            with torch.no_grad():
+                # Process current tokens
+                if step == 0:
+                    # First step: process entire batch
+                    logits = self.forward(batch_input_ids, use_cache=True)
+                else:
+                    # Subsequent steps: process only the last token for each prompt
+                    last_tokens = batch_input_ids[:, -1:]
+                    logits = self.forward(last_tokens, use_cache=True)
+            
+            # Process each prompt in the batch
+            for i in range(len(prompts)):
+                # Get logits for this prompt
+                prompt_logits = logits[i, -1, :]
+                
+                # Apply sampling
+                if temperature > 0:
+                    prompt_logits = prompt_logits / temperature
+                
+                if top_k > 0:
+                    v, _ = torch.topk(prompt_logits, top_k)
+                    prompt_logits[prompt_logits < v[-1]] = float('-inf')
+                
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(prompt_logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                    prompt_logits.scatter_(0, indices_to_remove, float('-inf'))
+                
+                # Sample
+                probs = F.softmax(prompt_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                
+                # Append to output
+                all_outputs[i].append(next_token.item())
+                
+                # Update input_ids for next step
+                if step == 0:
+                    batch_input_ids[i, input_lengths[i]:] = next_token
+                else:
+                    batch_input_ids[i, -1] = next_token
+                
+                # Check EOS
+                if next_token.item() == self.tokenizer.eos_token_id:
+                    all_outputs[i].append(self.tokenizer.eos_token_id)
+        
+        # Decode all outputs
+        results = []
+        for i, output_tokens in enumerate(all_outputs):
+            # Skip the first token (which is already in the prompt)
+            if len(output_tokens) > 0:
+                output_text = self.tokenizer.decode(output_tokens, skip_special_tokens=True)
+                results.append(output_text)
+            else:
+                results.append("")
+        
+        return results
+    
+    def _initialize_kv_cache(self, batch_size: int):
+        """Initialize KV cache for batch processing (Phase 2 feature)"""
+        self.kv_cache = {
+            'k': [],
+            'v': []
+        }
+        for _ in range(self.config.num_layers):
+            # Initialize with batch dimension
+            self.kv_cache['k'].append(None)
+            self.kv_cache['v'].append(None)
+        
+        self.kv_cache_batch_size = batch_size
     
     def clear_cache(self):
         """Clear all caches"""
