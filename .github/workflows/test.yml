@@ -10,11 +10,9 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    permissions:
-      # Temporary: allows the diagnostics step below to open an issue with test logs
-      contents: read
-      issues: write
     strategy:
+      # Keep reporting every matrix leg even if one fails: a single
+      # leg failure must not hide the state of the others.
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11"]
@@ -52,55 +50,12 @@ jobs:
     
     - name: Run unit tests
       run: |
-        pytest tests/unit/ -v --tb=long 2>&1 | tee unit_tests_output.txt
-        exit ${PIPESTATUS[0]}
+        pytest tests/unit/ -v --tb=short
     
     - name: Run integration tests
       run: |
-        pytest tests/integration/ -v --tb=long -m "not slow" 2>&1 | tee integration_tests_output.txt
-        exit ${PIPESTATUS[0]}
+        pytest tests/integration/ -v --tb=short -m "not slow"
     
-    - name: Report test failure (temporary CI diagnostics)
-      if: failure()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PYVER: ${{ matrix.python-version }}
-      run: |
-        python - <<'EOF'
-        import json, os, urllib.request
-
-        def post_issue(title, body):
-            data = json.dumps({"title": title, "body": body}).encode()
-            req = urllib.request.Request(
-                "https://api.github.com/repos/LeaderX404/HiveMind/issues",
-                data=data,
-                method="POST",
-                headers={
-                    "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
-                    "Accept": "application/vnd.github+json",
-                    "Content-Type": "application/json",
-                    "User-Agent": "ci-diagnostics",
-                },
-            )
-            try:
-                with urllib.request.urlopen(req) as resp:
-                    print("issue created:", resp.status)
-            except Exception as e:
-                print("issue creation failed:", e)
-
-        parts = []
-        for name in ("unit_tests_output.txt", "integration_tests_output.txt"):
-            try:
-                with open(name, "r", errors="replace") as f:
-                    parts.append("## " + name + "\n\n```\n" + f.read()[-25000:] + "\n```")
-            except FileNotFoundError:
-                pass
-        post_issue(
-            "[CI diagnostics] test failure on Python " + os.environ.get("PYVER", "?"),
-            "\n\n".join(parts) or "no logs captured",
-        )
-        EOF
-
     - name: Upload coverage report
       # Coverage upload is advisory: it must never block CI.
       continue-on-error: true
@@ -117,6 +72,8 @@ jobs:
     # The codebase still carries pre-existing black/isort style debt.
     # Lint runs on every push as an advisory signal until the reformat
     # lands, so it reports issues without blocking merges.
+    # Tracked in issue #3; make this job blocking again once the
+    # reformat lands.
     continue-on-error: true
     
     steps:
