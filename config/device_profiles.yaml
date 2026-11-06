@@ -1,0 +1,249 @@
+# Device profiles for HiveMind
+# These profiles define optimal settings for different hardware configurations
+
+# High-end devices (GPU with 16GB+ VRAM)
+high_end:
+  name: "High-End GPU"
+  description: "Devices with powerful GPUs (16GB+ VRAM)"
+  quantization:
+    bits: 8
+    method: "bitsandbytes"
+  sharding:
+    enabled: false
+    num_shards: 1
+  memory:
+    max_model_size_gb: 16
+  performance:
+    max_batch_size: 32
+    max_sequence_length: 2048
+  examples:
+    - "NVIDIA RTX 3090"
+    - "NVIDIA RTX 4090"
+    - "NVIDIA A100"
+
+# Mid-range devices (GPU with 8-16GB VRAM)
+mid_range:
+  name: "Mid-Range GPU"
+  description: "Devices with mid-range GPUs (8-16GB VRAM)"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: false
+    num_shards: 1
+  memory:
+    max_model_size_gb: 8
+  performance:
+    max_batch_size: 16
+    max_sequence_length: 1024
+  examples:
+    - "NVIDIA RTX 3060"
+    - "NVIDIA RTX 3070"
+    - "NVIDIA RTX 3080"
+
+# Low-end devices (GPU with 4-8GB VRAM or powerful CPU)
+low_end:
+  name: "Low-End GPU / Powerful CPU"
+  description: "Devices with limited GPU memory or powerful CPUs"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: true
+    num_shards: 2
+  memory:
+    max_model_size_gb: 4
+  performance:
+    max_batch_size: 8
+    max_sequence_length: 512
+  examples:
+    - "NVIDIA RTX 3050"
+    - "NVIDIA GTX 1660"
+    - "Intel i9-13900K"
+    - "AMD Ryzen 9 7950X"
+
+# Raspberry Pi and similar SBCs (Single Board Computers)
+raspberry_pi:
+  name: "Raspberry Pi"
+  description: "Raspberry Pi and similar single-board computers"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: true
+    num_shards: 2
+  memory:
+    max_model_size_gb: 2
+  performance:
+    max_batch_size: 1
+    max_sequence_length: 256
+  platform:
+    os: "linux"
+    arch: "arm64"
+    cpu_cores: 4
+  optimizations:
+    use_cpu: true
+    use_int8: true
+    disable_logging: false
+  examples:
+    - "Raspberry Pi 4 (8GB)"
+    - "Raspberry Pi 5"
+    - "Jetson Nano"
+
+# Jetson devices (NVIDIA ARM-based devices)
+jetson:
+  name: "NVIDIA Jetson"
+  description: "NVIDIA Jetson family of embedded devices"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: true
+    num_shards: 2
+  memory:
+    max_model_size_gb: 4
+  performance:
+    max_batch_size: 4
+    max_sequence_length: 512
+  platform:
+    os: "linux"
+    arch: "arm64"
+    gpu: "nvidia"
+  optimizations:
+    use_tensorrt: true
+    use_fp16: true
+    use_cuda: true
+  examples:
+    - "Jetson Orin Nano"
+    - "Jetson Orin NX"
+    - "Jetson AGX Orin"
+    - "Jetson Xavier NX"
+
+# Google Coral (TPU-based devices)
+coral:
+  name: "Google Coral"
+  description: "Google Coral TPU-based devices"
+  quantization:
+    bits: 8
+    method: "tflite"
+  sharding:
+    enabled: false
+    num_shards: 1
+  memory:
+    max_model_size_gb: 1
+  performance:
+    max_batch_size: 1
+    max_sequence_length: 128
+  platform:
+    os: "linux"
+    arch: "arm64"
+    accelerator: "tpu"
+  optimizations:
+    use_tflite: true
+    use_edgetpu: true
+    convert_to_tflite: true
+  examples:
+    - "Coral Dev Board"
+    - "Coral USB Accelerator"
+
+# Mobile devices (Android)
+mobile_android:
+  name: "Android Mobile"
+  description: "Android smartphones and tablets"
+  quantization:
+    bits: 4
+    method: "tflite"
+  sharding:
+    enabled: false
+    num_shards: 1
+  memory:
+    max_model_size_gb: 1
+  performance:
+    max_batch_size: 1
+    max_sequence_length: 128
+  platform:
+    os: "android"
+    arch: "arm64"
+  optimizations:
+    use_tflite: true
+    use_gpu_delegate: true
+    use_hexagon_delegate: true
+    use_nnapi: true
+  examples:
+    - "Samsung Galaxy S23"
+    - "Google Pixel 8"
+    - "OnePlus 11"
+
+# Mobile devices (iOS)
+mobile_ios:
+  name: "iOS Mobile"
+  description: "iPhones and iPads"
+  quantization:
+    bits: 4
+    method: "coreml"
+  sharding:
+    enabled: false
+    num_shards: 1
+  memory:
+    max_model_size_gb: 1
+  performance:
+    max_batch_size: 1
+    max_sequence_length: 128
+  platform:
+    os: "ios"
+    arch: "arm64"
+  optimizations:
+    use_coreml: true
+    use_neural_engine: true
+    convert_to_coreml: true
+  examples:
+    - "iPhone 15 Pro"
+    - "iPad Pro M2"
+
+# Cloud instances (CPU-only)
+cloud_cpu:
+  name: "Cloud CPU"
+  description: "Cloud instances with CPU-only"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: true
+    num_shards: 4
+  memory:
+    max_model_size_gb: 8
+  performance:
+    max_batch_size: 8
+    max_sequence_length: 512
+  platform:
+    os: "linux"
+    arch: "x86_64"
+  optimizations:
+    use_openmp: true
+    use_mkl: true
+    use_avx: true
+  examples:
+    - "AWS EC2 (CPU)"
+    - "Google Cloud Compute (CPU)"
+    - "Azure VM (CPU)"
+
+# Default profile (auto-detection)
+default:
+  name: "Auto-Detect"
+  description: "Automatically detect and apply optimal settings"
+  quantization:
+    bits: 4
+    method: "bitsandbytes"
+  sharding:
+    enabled: true
+    num_shards: 2
+  memory:
+    max_model_size_gb: 4
+  performance:
+    max_batch_size: 4
+    max_sequence_length: 512
+  detection:
+    check_gpu: true
+    check_memory: true
+    check_os: true
+    check_arch: true

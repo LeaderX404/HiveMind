@@ -10,7 +10,15 @@ class LocalInferenceEngine:
         self.device = device
 
     def generate(self, prompt: str, max_new_tokens: int = 50, **kwargs):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # Tokenize the prompt
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        
+        # Move inputs to device
+        if isinstance(inputs, dict):
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        else:
+            inputs = inputs.to(self.device)
+        
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -33,9 +41,20 @@ class ShardedInferenceEngine:
         return x
 
     def generate(self, prompt: str, max_new_tokens: int = 50):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        x = inputs["input_ids"]
+        # Tokenize the prompt
+        inputs = self.tokenizer(prompt, return_tensors="pt")
+        
+        # Get input_ids and move to device
+        if isinstance(inputs, dict):
+            input_ids = inputs["input_ids"].to(self.device)
+        else:
+            input_ids = inputs.to(self.device)
+        
+        # Process through all shards
+        x = input_ids
         for i in range(len(self.shards)):
             x = self.forward_shard(i, x)
+        
+        # Get output tokens
         outputs = torch.argmax(x, dim=-1)
         return self.tokenizer.decode(outputs[0], skip_special_tokens=True)

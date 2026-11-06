@@ -39,12 +39,23 @@ class InferenceServiceStub:
                 request_serializer=inference__pb2.InferenceRequest.SerializeToString,
                 response_deserializer=inference__pb2.InferenceResponse.FromString,
                 _registered_method=True)
+        self.GetStats = channel.unary_unary(
+                '/InferenceService/GetStats',
+                request_serializer=inference__pb2.StatsRequest.SerializeToString,
+                response_deserializer=inference__pb2.ServerStats.FromString,
+                _registered_method=True)
 
 
 class InferenceServiceServicer:
     """Missing associated documentation comment in .proto file."""
 
     def ProcessShard(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetStats(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -57,6 +68,11 @@ def add_InferenceServiceServicer_to_server(servicer, server):
                     servicer.ProcessShard,
                     request_deserializer=inference__pb2.InferenceRequest.FromString,
                     response_serializer=inference__pb2.InferenceResponse.SerializeToString,
+            ),
+            'GetStats': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetStats,
+                    request_deserializer=inference__pb2.StatsRequest.FromString,
+                    response_serializer=inference__pb2.ServerStats.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -86,6 +102,33 @@ class InferenceService:
             '/InferenceService/ProcessShard',
             inference__pb2.InferenceRequest.SerializeToString,
             inference__pb2.InferenceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetStats(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/InferenceService/GetStats',
+            inference__pb2.StatsRequest.SerializeToString,
+            inference__pb2.ServerStats.FromString,
             options,
             channel_credentials,
             insecure,

@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\"M\n\x10InferenceRequest\x12\x12\n\ninput_data\x18\x01 \x01(\x0c\x12\x10\n\x08model_id\x18\x02 \x01(\t\x12\x13\n\x0bshard_index\x18\x03 \x01(\x05\"7\n\x11InferenceResponse\x12\x13\n\x0boutput_data\x18\x01 \x01(\x0c\x12\r\n\x05\x65rror\x18\x02 \x01(\t2I\n\x10InferenceService\x12\x35\n\x0cProcessShard\x12\x11.InferenceRequest\x1a\x12.InferenceResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\"M\n\x10InferenceRequest\x12\x12\n\ninput_data\x18\x01 \x01(\x0c\x12\x10\n\x08model_id\x18\x02 \x01(\t\x12\x13\n\x0bshard_index\x18\x03 \x01(\x05\"L\n\x11InferenceResponse\x12\x13\n\x0boutput_data\x18\x01 \x01(\x0c\x12\r\n\x05\x65rror\x18\x02 \x01(\t\x12\x13\n\x0bshard_index\x18\x03 \x01(\x05\"\x0e\n\x0cStatsRequest\"N\n\x0bServerStats\x12\x15\n\rrequest_count\x18\x01 \x01(\x03\x12\x13\n\x0b\x65rror_count\x18\x02 \x01(\x03\x12\x13\n\x0bshard_index\x18\x03 \x01(\x05\x32r\n\x10InferenceService\x12\x35\n\x0cProcessShard\x12\x11.InferenceRequest\x1a\x12.InferenceResponse\x12\'\n\x08GetStats\x12\r.StatsRequest\x1a\x0c.ServerStatsb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,7 +34,11 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_INFERENCEREQUEST']._serialized_start=19
   _globals['_INFERENCEREQUEST']._serialized_end=96
   _globals['_INFERENCERESPONSE']._serialized_start=98
-  _globals['_INFERENCERESPONSE']._serialized_end=153
-  _globals['_INFERENCESERVICE']._serialized_start=155
-  _globals['_INFERENCESERVICE']._serialized_end=228
+  _globals['_INFERENCERESPONSE']._serialized_end=174
+  _globals['_STATSREQUEST']._serialized_start=176
+  _globals['_STATSREQUEST']._serialized_end=190
+  _globals['_SERVERSTATS']._serialized_start=192
+  _globals['_SERVERSTATS']._serialized_end=270
+  _globals['_INFERENCESERVICE']._serialized_start=272
+  _globals['_INFERENCESERVICE']._serialized_end=386
 # @@protoc_insertion_point(module_scope)
