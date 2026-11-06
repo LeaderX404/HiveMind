@@ -138,13 +138,18 @@ try:
     bits = dynamic.get_optimal_bits(16.0, 200.0)
     assert bits == 2, f"Expected 2 bits for 100B model on 16GB RAM, got {bits}"
 
-    # Same model with plenty of RAM: Q4 is preferred
-    bits_relaxed = dynamic.get_optimal_bits(64.0, 200.0)
+    # Same model with 30GB RAM: 8-bit (50GB) is too big, Q4 (25GB) fits
+    bits_relaxed = dynamic.get_optimal_bits(30.0, 200.0)
     assert bits_relaxed == 4
+
+    # With 64GB RAM: 8-bit (50GB) fits comfortably
+    bits_plenty = dynamic.get_optimal_bits(64.0, 200.0)
+    assert bits_plenty == 8
 
     print("✅ Dynamic quantizer picks Q2 for 100B models")
     print(f"   - 100B model, 16GB RAM -> {bits}-bit")
-    print(f"   - 100B model, 64GB RAM -> {bits_relaxed}-bit")
+    print(f"   - 100B model, 30GB RAM -> {bits_relaxed}-bit")
+    print(f"   - 100B model, 64GB RAM -> {bits_plenty}-bit")
 
 except Exception as e:
     print(f"❌ Dynamic quantizer test failed: {e}")
