@@ -10,6 +10,11 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    permissions:
+      # Temporary: allows the diagnostics step below to open an
+      # issue carrying the pytest output tail on test failure.
+      contents: read
+      issues: write
     strategy:
       # Keep reporting every matrix leg even if one fails: a single
       # leg failure must not hide the state of the others.
@@ -50,11 +55,48 @@ jobs:
     
     - name: Run unit tests
       run: |
-        pytest tests/unit/ -v --tb=short
+        pytest tests/unit/ -v --tb=long 2>&1 | tee unit_tests_output.txt
+        exit ${PIPESTATUS[0]}
     
     - name: Run integration tests
       run: |
-        pytest tests/integration/ -v --tb=short -m "not slow"
+        pytest tests/integration/ -v --tb=long -m "not slow" 2>&1 | tee integration_tests_output.txt
+        exit ${PIPESTATUS[0]}
+    
+    - name: Report test failure (temporary CI diagnostics)
+      # TEMPORARY: opens an issue with the pytest output tail so the
+      # failure is diagnosable without log access. Remove once CI
+      # is green again.
+      if: failure()
+      run: |
+        python - <<'EOF'
+        import json
+        import os
+        import urllib.request
+
+        version = "${{ matrix.python-version }}"
+        title = f"[CI diagnostics] test failure on Python {version}"
+        body = ""
+        for name in ("unit_tests_output.txt", "integration_tests_output.txt"):
+            if os.path.exists(name):
+                with open(name, "r", errors="replace") as f:
+                    lines = f.read().splitlines()
+                body += f"## {name} (last 100 lines)\n```\n" + "\n".join(lines[-100:]) + "\n```\n"
+        if not body:
+            body = "No output captured."
+        payload = json.dumps({"title": title, "body": body}).encode()
+        req = urllib.request.Request(
+            "https://api.github.com/repos/LeaderX404/HiveMind/issues",
+            data=payload,
+            headers={
+                "Authorization": "token ${{ secrets.GITHUB_TOKEN }}",
+                "Accept": "application/vnd.github+json",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req)
+        print(f"Created issue: {title}")
+        EOF
     
     - name: Upload coverage report
       # Coverage upload is advisory: it must never block CI.
