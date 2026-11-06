@@ -1,0 +1,28 @@
+# MkDocs configuration for the HiveMind documentation site.
+# CI builds this with `mkdocs build --strict` (warnings are errors).
+
+site_name: HiveMind
+site_description: Run 7B+ LLMs on low-end devices via Neural Swarm Inference
+site_author: VALCRYPTIA (LeaderX404)
+site_url: https://github.com/LeaderX404/HiveMind
+
+repo_name: LeaderX404/HiveMind
+repo_url: https://github.com/LeaderX404/HiveMind
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - User Guide: user_guide.md
+  - API Reference: api_reference.md
+  - Contributing: contributing.md
