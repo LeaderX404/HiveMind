@@ -71,22 +71,38 @@ jobs:
   guard:
     name: Serialization Guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     # Blocking: unsafe deserialization must never come back. This
     # guard is also the documented answer to the PYSEC-2026-2286
-    # pip-audit finding: the vulnerable surface (torch.load and
-    # pickle on any path) is structurally absent from the codebase
-    # and this job keeps it that way.
+    # pip-audit finding: the vulnerable surface is structurally
+    # absent from the codebase and this job keeps it that way.
+    # The guard scans source text: it stops accidents, not
+    # sabotage - documented limits in CONTRIBUTING.md.
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
     
-    - name: Block unsafe deserialization calls
+    - name: Compile-check benchmark script
+      run: |
+        python -m py_compile benchmark.py
+    
+    - name: Block unsafe deserialization; validate exception markers
       run: |
         python - <<'EOF'
+        import datetime
+        import json
+        import os
         import pathlib
         import re
         import sys
+        import urllib.request
 
+        REPO = "LeaderX404/HiveMind"
+        TOKEN = os.environ.get("GITHUB_TOKEN", "")
         PATTERNS = [
             (r"torch\.load\s*\(", "torch.load"),
             (r"pickle\.load\s*\(", "pickle.load"),
@@ -94,34 +110,107 @@ jobs:
             (r"pickle\.Unpickler", "pickle.Unpickler"),
             (r"yaml\.load\s*\(", "yaml.load (use yaml.safe_load)"),
         ]
-        MARKER = "serialization-guard: allowed"
+        MARKER = re.compile(
+            r"serialization-guard: allowed\s*#issue-(\d+)\s+expires=(\d{4}-\d{2}-\d{2})"
+        )
+        MARKER_HINT = (
+            "exception marker must be the full form: "
+            "serialization-guard: allowed #issue-NNN expires=YYYY-MM-DD"
+        )
+        MAX_TTL_DAYS = 90
 
-        offenders = []
-        for root in (pathlib.Path("hivemind"), pathlib.Path("tests")):
-            for path in root.rglob("*.py"):
-                for lineno, line in enumerate(
-                    path.read_text(encoding="utf-8").splitlines(), 1
-                ):
-                    stripped = line.strip()
-                    if stripped.startswith("#"):
-                        continue
-                    if MARKER in line:
-                        continue
-                    for pattern, label in PATTERNS:
-                        if re.search(pattern, line):
-                            offenders.append(
-                                f"{path}:{lineno}: {label}: {stripped}"
-                            )
+        errors = []
+        exceptions = []
 
-        if offenders:
-            print("\n".join(offenders))
-            print(
-                "\nUnsafe deserialization is forbidden. If this call is "
-                "an audited, documented exception, add the inline "
-                "marker: serialization-guard: allowed"
+        roots = [pathlib.Path("hivemind"), pathlib.Path("tests")]
+        bench = pathlib.Path("benchmark.py")
+        files = []
+        for root in roots:
+            files.extend(root.rglob("*.py"))
+        if bench.exists():
+            files.append(bench)
+
+        for path in files:
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                for pattern, label in PATTERNS:
+                    if not re.search(pattern, line):
+                    continue
+                    m = MARKER.search(line)
+                    if not m:
+                        errors.append(
+                            f"{path}:{lineno}: {label}: {stripped}"
+                        )
+                        errors.append(f"  -> {MARKER_HINT}")
+                    else:
+                        exceptions.append(
+                            (str(path), lineno, int(m.group(1)), m.group(2))
+                        )
+
+        # Layer 1 (issue binding): open, labeled security-exception,
+        # assigned. API failures fail closed.
+        today = datetime.date.today()
+        for path, lineno, issue, expires in exceptions:
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{REPO}/issues/{issue}",
+                headers={
+                    "Authorization": f"token {TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                },
             )
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    data = json.load(resp)
+            except Exception as exc:
+                errors.append(
+                    f"{path}:{lineno}: cannot verify issue #{issue} (fail closed): {exc}"
+                )
+                continue
+            labels = [lab.get("name") for lab in data.get("labels", [])]
+            if data.get("state") != "open":
+                errors.append(f"{path}:{lineno}: issue #{issue} is not open")
+            if "security-exception" not in labels:
+                errors.append(
+                    f"{path}:{lineno}: issue #{issue} lacks the security-exception label"
+                )
+            if not data.get("assignee"):
+                errors.append(f"{path}:{lineno}: issue #{issue} has no assignee")
+
+        # Layer 2 (TTL): expiry must be in the future, at most 90 days out
+        for path, lineno, issue, expires in exceptions:
+            exp = datetime.date.fromisoformat(expires)
+            if exp <= today:
+                errors.append(
+                    f"{path}:{lineno}: exception expired on {expires} - remove it or renew the issue"
+                )
+            elif (exp - today).days > MAX_TTL_DAYS:
+                errors.append(
+                    f"{path}:{lineno}: exception TTL exceeds {MAX_TTL_DAYS} days"
+                )
+
+        # Layer 3 (ratchet): marker count may never exceed the baseline
+        baseline = int(
+            pathlib.Path("serialization_exceptions.baseline")
+            .read_text()
+            .strip()
+        )
+        if len(exceptions) > baseline:
+            errors.append(
+                f"exception count {len(exceptions)} exceeds baseline {baseline} "
+                "(net-zero rule: retire one before adding another)"
+            )
+
+        if errors:
+            print("\n".join(errors))
             sys.exit(1)
-        print("Serialization Guard: clean (no torch.load/pickle/yaml.load in sources)")
+        print(
+            f"Serialization Guard: clean. {len(exceptions)} documented "
+            f"exception(s), baseline {baseline}."
+        )
         EOF
 
   lint:
