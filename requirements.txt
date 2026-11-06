@@ -10,5 +10,3 @@ protobuf
 ray[default]
 flask
 pyyaml
-tensorflow
-tflite-runtime
