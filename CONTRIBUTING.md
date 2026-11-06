@@ -149,6 +149,46 @@ hivemind/
 - [ ] No breaking changes (or documented)
 ```
 
+## 🛡️ Serialization Guard & Safe Loading Policy
+
+The **Serialization Guard** CI job (blocking) rejects any use of
+`torch.load`, `pickle.load`, `pickle.loads`, `pickle.Unpickler` or
+bare `yaml.load` anywhere under `hivemind/`, `tests/` and in
+`benchmark.py`.
+
+**What the guard is - and is not.** The guard scans source text: it
+stops *accidents*, not sabotage. Deliberately obfuscated calls such as
+`getattr(pickle, "load")` or
+`importlib.import_module("pickle").load` pass under it. Code review
+remains the backstop against malice; the guard is the backstop against
+human error and creeping debt.
+
+**The approved safe paths** (use these instead):
+
+- Tensors over the network or on disk: `hivemind.net.serialization`
+  (`serialize_tensor` / `deserialize_tensor`, the HMT1 container).
+  Disk cache pages use the same format (HMP2, `hivemind/core/pager.py`).
+- Model files: `safetensors` via `hivemind/core/direct_loader.py`,
+  optionally with `expected_sha256` integrity verification.
+- Configuration: `yaml.safe_load(...)`.
+
+**Exception policy - exceptions are priced, not free.** A call site
+that genuinely needs a blocked API must carry the full inline marker:
+
+    serialization-guard: allowed #issue-NNN expires=YYYY-MM-DD
+
+The marker alone is not enough. The guard enforces, on every push:
+
+1. **Issue binding** - issue `NNN` must exist, be open, carry the
+   `security-exception` label and have an assignee. An exception is
+   a public, owned decision - never an anonymous comment.
+2. **TTL** - `expires` must be in the future and at most 90 days out.
+   No eternal exceptions. A weekly scheduled workflow opens a
+   reminder issue before an exception expires.
+3. **Ratchet (net zero)** - the total number of markers may never
+   exceed the count recorded in `serialization_exceptions.baseline`.
+   Adding a new exception requires retiring an old one in the same PR.
+
 ## 🎓 Getting Help
 
 If you need help:
