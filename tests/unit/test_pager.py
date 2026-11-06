@@ -181,10 +181,25 @@ class TestMemoryMonitor:
         """Test checking if a page can be loaded"""
         monitor = MemoryMonitor(max_memory_mb=1000)
         
-        # Should be able to load a small page
-        assert monitor.can_load_page(100)
+        # can_load_page subtracts the real process RSS from the memory
+        # budget, so the assertion used to depend on the actual memory
+        # footprint of the test process (torch + transformers +
+        # coverage), which varies per platform and Python version. The
+        # unit run on Python 3.11 legitimately exceeded 900MB RSS and
+        # flipped the check to False. Pin get_memory_usage to
+        # deterministic values instead: with 100MB used out of a 1000MB
+        # budget, exactly 900MB remain available.
+        def fake_usage():
+            return {'ram_mb': 100, 'gpu_mb': 0, 'total_mb': 100, 'available_mb': 900}
         
-        # Should not be able to load a large page
+        monitor.get_memory_usage = fake_usage
+        
+        # Should be able to load pages that fit the remaining budget
+        assert monitor.can_load_page(100)
+        assert monitor.can_load_page(900)  # exactly fits
+        
+        # Should not be able to load pages that exceed the budget
+        assert not monitor.can_load_page(901)  # 1MB over budget
         assert not monitor.can_load_page(2000)
 
 
