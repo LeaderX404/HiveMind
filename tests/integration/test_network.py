@@ -93,8 +93,17 @@ class TestInferenceServicer:
         mock_layers = [("layer1", MagicMock())]
         servicer = InferenceServicer(shard_index=0, shard_layers=mock_layers)
         
-        # Valid magic but garbage after the header.
-        payload = zlib.compress(b"HMT1" + (2).to_bytes(4, "little") + b'{"shape": [1, 3], "dtype": "float32"}' + b"garbage")
+        # Valid magic and a well-formed header, but the tensor
+        # bytes are shorter than shape/dtype require: the
+        # byte-length check must reject the mismatch instead of
+        # reading out of bounds.
+        header = b'{"shape": [1, 3], "dtype": "float32"}'
+        payload = zlib.compress(
+            b"HMT1"
+            + len(header).to_bytes(4, "little")
+            + header
+            + b"\x00\x00\x80",
+        )
         request = inference_pb2.InferenceRequest(
             input_data=payload,
             model_id="test-model",
