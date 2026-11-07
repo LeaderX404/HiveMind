@@ -12,8 +12,7 @@
 - **No Full Model Loading**: Never loads the entire model into RAM at once
 - **Direct File Access**: Reads tensors directly from GGUF/Safetensors files on demand
 - **Complete Transformer Support**: Full forward pass with RoPE, RMSNorm, Causal Mask, KV Cache, GQA
-- **Quantization Support**: Q2, Q4 and Q8 quantization for memory efficiency (2x-16x compression)
-- **50B-100B Model Support**: Reference presets (50b/70b/100b) and 4000MB adaptive pages for huge models (Phase 3)
+- **Quantization Support**: Q2, Q4 and Q8 quantization for memory efficiency (2x-8x compression, derived from bit widths against the 16-bit FP16 baseline: 16/8, 16/4, 16/2 - arithmetic, never a benchmark claim)
 - **Tensor Caching**: LRU cache for loaded tensors to avoid repeated file reads
 - **Performance Monitoring**: Track RAM usage, GPU usage, tokens/sec, and loading times
 - **Model Agnostic**: Works with Llama, Mistral, Qwen, Phi-2, and other transformer models
@@ -154,9 +153,25 @@ response = engine.generate("Explain AI in simple terms", max_new_tokens=50)
 - ✅ **Phi-2**
 - ✅ **Custom transformer models**
 
+## 🧪 Experimental
+
+Untested until the 3-device measurement campaign records
+otherwise:
+
+- **50B-100B model presets (Phase 3)**: reference presets
+  (50b/70b/100b) and 4000MB adaptive pages exist in code but have
+  never been exercised on hardware. Do not rely on them.
+
+See [LIMITATIONS.md](LIMITATIONS.md) for what this engine cannot
+do today.
+
 ## 📊 Performance
 
-### Memory Requirements
+### Memory Requirements (arithmetic, not measurements)
+
+Memory per quantization level is arithmetic - parameters x bits per
+parameter against the 16-bit FP16 baseline - never a benchmark
+result:
 
 | Model Size | FP16 | Q8 | Q4 | Q2 |
 |------------|------|----|----|----|
@@ -166,13 +181,14 @@ response = engine.generate("Explain AI in simple terms", max_new_tokens=50)
 | 70B | ~140GB | ~70GB | ~35GB | ~18GB |
 | 100B | ~200GB | ~100GB | ~50GB | ~25GB |
 
-### Speed Estimates (with NVMe SSD)
+### Speed
 
-| Hardware | Tokens/sec |
-|----------|------------|
-| CPU only | 5-10 |
-| RTX 3060 | 20-50 |
-| RTX 4090 | 50-100 |
+No speed numbers are published until they are measured. The
+measurement protocol is pre-registered in
+[PRE_REGISTERED.md](PRE_REGISTERED.md); measured tokens/sec per
+device returns to this section only after the 3-device campaign
+records them. Until then, any tokens/sec number claimed about
+HiveMind is a number without a measurement.
 
 ## 🔧 Configuration
 
