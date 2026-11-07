@@ -1,0 +1,22 @@
+# Overflow gate candidate (issue #30).
+#
+# MEASURED, not derived from paper: total_size_gb and sha256 come
+# from the hosting ledger (git-LFS fingerprints the actual file
+# bytes). Decimal GB (1 GB = 10^9 bytes); exact file size:
+# 18556685824 bytes. total_params / active_params are from the
+# official Qwen3-30B-A3B model card.
+#
+# active_size_gb is DERIVED arithmetic, declared here:
+# total_size_gb * (active_params / total_params)
+#   = 18.56 * (3.3e9 / 30.5e9) = 2.01.
+model_id: Qwen/Qwen3-30B-A3B-GGUF:Qwen3-30B-A3B-Q4_K_M
+total_params: 30500000000
+active_params: 3300000000
+quantization: 4-bit
+total_size_gb: 18.56
+active_size_gb: 2.01
+sha256: 0d003f6662faee786ed5da3e31b29c978de5ae5d275c8794c606a7f3c01aa8f5
+source_url: https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf
+reference_device: "3x8GB RAM + NVMe 3-7GB/s"
+experimental: false
+notes: "Overflow gate candidate - cannot fit on single 8GB device"
