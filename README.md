@@ -162,21 +162,33 @@ line, judged by a threshold that is derived, not chosen:
 
 | Model | Parity debt | Target |
 |-------|-------------|--------|
-| Llama-3.1-8B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x sigma_model (k derived, #35) |
-| Qwen2.5-7B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x sigma_model (k derived, #35) |
+| Llama-3.1-8B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x max(2 runs) (k derived, #35, #36) |
+| Qwen2.5-7B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x max(2 runs) (k derived, #35, #36) |
 
-scripts/parity_check.py runs HiveMind and Hugging Face on the same
-prompt and measures the judge's own noise before judging: HF runs
---noise-runs times on the same backend (plus a cross-backend run
-when a second backend exists), the pairwise max-abs-diff samples
-give noise_floor and sigma_model, a mandatory Gaussianity test
-(scipy.stats KS test against a fitted normal) derives k, and the
-tool prints "diff=X, noise_floor=Y, sigma_model=S, k=K,
-threshold=Z, status: PASS/FAIL". k follows the issue #35 rule
-(k = Quantile(noise_dist, 1 - alpha), alpha = 0.27%): 3 only when
-the Gaussianity test passes, the empirical quantile otherwise.
-Every number it prints comes out of the measurement. A debt is
-paid only by the protocol below.
+scripts/parity_check.py runs HiveMind and Hugging Face on the
+same prompt and measures the judge's own noise before judging:
+HF runs --sessions x --seeds times (defaults 5 x 3) on the
+same backend (plus cross-backend runs when a second backend
+exists), and the pairwise max-abs-diff run samples give the
+noise distribution. The logits instrument's noise measure is
+max(2 runs) - the maximum absolute difference between two
+noise runs - because logit noise is non-Gaussian (issue #36:
+one law, threshold = k x noise_measure(instrument), a measure
+per instrument). A mandatory Gaussianity test (scipy.stats KS
+test against a fitted normal) derives k: k = 3 when it
+passes - provisional under the issue #36 cost derivation
+(k* = k_gaussian + (1/2) x ln[((1 - pi) / pi) x
+(C_accept / C_reject)], approximately 4.2 under the temporary
+pi = 0.9 and C_accept / C_reject = 100; k = 3 is an
+assumption result, not a rule, until the cost issue measures
+the ratio) - and the empirical quantile otherwise. The session
+structure also decomposes within-session consistency from
+across-session stability: the tool prints sigma_within,
+sigma_across and ICC = sigma_across^2 / (sigma_across^2 +
+sigma_within^2), with ICC > 0.5 = verified and ICC < 0.5 =
+intermittent - the word "stable" is never claimed on
+consistency alone. Every number it prints comes out of the
+measurement. A debt is paid only by the protocol below.
 
 ### Paying a debt (issue #35)
 
@@ -191,15 +203,20 @@ before the campaign runs:
   target width is named in the campaign issue before the campaign
   runs.
 - 3 seeds per claim: every claim runs under three seeds, and all
-  three lines are published.
+  three lines are published. Three seeds measure within-session
+  consistency; across-session stability is a separate claim
+  (5 sessions x 3 seeds, ICC > 0.5 as printed by the tool,
+  MODELS.md issue #36) and is never claimed on consistency
+  alone.
 - Aggregation rule: p95(per-prompt diff) < threshold, with the
-  threshold from scripts/parity_check.py (k x sigma_model, k
+  threshold from scripts/parity_check.py (k x max(2 runs), k
   derived).
 - Pass condition: all claims pass, or 95% pass by a decision named
   before the campaign - never a decision named after seeing the
   numbers.
-- Output: diff p95, noise_floor, threshold, PASS/FAIL - all
-  published, none summarized away.
+- Output: diff p95, noise_measure, the stability line
+  (sigma_within, sigma_across, ICC), threshold, PASS/FAIL -
+  all published, none summarized away.
 
 ## 🗺️ Planned architectures (layout not implemented)
 

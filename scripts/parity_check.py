@@ -1,64 +1,86 @@
 #!/usr/bin/env python3
 """
 Parity checker: HiveMind vs Hugging Face, judged by a threshold
-the tool derives from its own measurement (covenant issues #34
-and #35).
+the tool derives from its own measurement (covenant issues #34,
+#35 and #36).
 
-The acceptance threshold for parity is not a constant chosen in
-advance. It is derived from the measured noise of the judge
-itself:
+One law, not two (issue #36):
 
-    noise samples = pairwise max |logits(HF, run i) -
-                    logits(HF, run j)| over --noise-runs HF
-                    runs on the same backend, plus a
-                    cross-backend sample when a second backend
-                    exists (CUDA vs CPU, or sdpa vs eager
-                    attention - used when one exists, skipped
-                    when it does not; it is never faked)
-    noise_floor   = max(noise samples)      (the raw scale)
-    sigma_model   = std(noise samples)     (the threshold
-                    basis, issue #35)
-    k             = Quantile(noise_dist, 1 - alpha),
-                    alpha = 0.27% target false rejection
-    threshold     = k x sigma_model
+    threshold = k x noise_measure(instrument)
 
-k is derived, never assumed (issue #35). A Gaussianity test on
-the noise samples is mandatory: a KS test against a normal
-distribution fitted to the samples (scipy.stats; no scipy, no
-verdict). If the test passes, k = 3 is legitimate - the
-covenant's 3-sigma convention (99.73% of a Gaussian's mass
-within +/- 3 sigma, 0.27% outside) - and the normality
-assumption is documented next to the verdict. If it fails, k
-comes from the empirical quantile of the standardized samples -
-never the round 3. A fixed k without a Gaussianity test is a
-bare constant wearing a lab coat.
+This instrument measures logits. Logit noise is non-Gaussian,
+so its noise measure is the extreme statistic, not the std:
+
+    noise_measure = max(2 runs)
+                  = the maximum absolute difference between
+                    two noise runs (the max over the pairwise
+                    max-abs-diff run samples)
+
+The judge runs --sessions sessions x --seeds seeds HF forwards
+(defaults 5 x 3, the issue #36 stability protocol):
+
+    within samples = pairwise run diffs inside each session
+                     (3 seeds = within-session consistency)
+    across samples = pairwise session-mean diffs
+                     (5 sessions x 3 seeds = across-session
+                     stability)
+    sigma_within   = std(within samples)
+    sigma_across   = std(across samples)
+    ICC            = sigma_across^2 / (sigma_across^2 +
+                     sigma_within^2)
+    ICC > 0.5      = verified; ICC < 0.5 = intermittent (the
+                     boundary joins the weaker claim; the word
+                     "stable" is never printed on consistency
+                     alone)
+
+k is derived, never assumed (issues #35, #36). A Gaussianity
+test on the noise samples is mandatory: a KS test against a
+normal distribution fitted to the samples (scipy.stats; no
+scipy, no verdict). If it passes, k = 3 - and k = 3 is
+provisional under the issue #36 cost derivation (k* =
+k_gaussian + (1/2) x ln[((1 - pi) / pi) x (C_accept /
+C_reject)], approximately 4.2 under the temporary pi = 0.9
+and C_accept / C_reject = 100; k = 3 is an assumption result,
+not a rule, until C_accept / C_reject is measured in a
+separate issue). If the Gaussianity test fails, k comes from
+the empirical quantile of the standardized samples - never the
+round 3. A fixed k without a Gaussianity test is a bare
+constant wearing a lab coat.
 
 Known simplifications, documented rather than hidden: the
 pairwise samples share runs (correlated draws, not independent
 ones); the KS test against a fitted normal is Lilliefors
 territory (strictly it needs the Lilliefors correction); the
-cross-backend samples are pooled with the same-backend samples
-into one noise distribution; and with few samples the empirical
-quantile at 99.73% is the sample maximum - it lowers the false
-rejection rate below the target and raises the false acceptance
-risk. More noise runs tighten every one of these.
+cross-backend diffs are printed and pooled into the
+distribution the Gaussianity test sees, while the noise
+measure itself is the max over same-backend run pairs (a
+backend gap is a configuration difference, not run noise);
+the across samples compare session MEANS by max-abs-diff, a
+scalar proxy for a tensor distance; and with few samples the
+empirical quantile at 99.73% is the sample maximum - it
+lowers the false rejection rate below the target and raises
+the false acceptance risk. More sessions and seeds tighten
+every one of these.
 
 Refuses to judge (nonzero exit, no default, no fallback):
 - transformers or torch missing (no judge, no verdict);
 - scipy missing (the Gaussianity test is mandatory);
-- fewer than MIN_NOISE_RUNS noise runs (an under-powered test
-  rejects nothing);
-- a zero noise floor (a bit-identical judge measured nothing,
-  exactly like the reproduction tolerance of section 6);
-- a zero sigma_model (one constant value is not a
-  distribution; there is nothing to standardize);
+- an under-powered session/seed structure (an under-powered
+  test rejects nothing);
+- a zero noise measure (a bit-identical judge measured
+  nothing, exactly like the reproduction tolerance of PRE
+  section 6);
+- a degenerate noise distribution (a constant is not a
+  distribution; there is nothing to standardize) or a noise
+  that cannot be decomposed into within and across (both
+  consistency and stability would be undefined);
 - logits whose shapes disagree (a comparison that cannot be
   made is not a comparison).
 
 Usage:
   python scripts/parity_check.py --hf gpt2 --hive gpt2.safetensors
       --config config.json --prompt "Explain AI in simple terms"
-      [--noise-runs 8]
+      [--sessions 5] [--seeds 3]
 """
 
 import argparse
@@ -66,12 +88,21 @@ import sys
 
 # Target false rejection rate per test (issue #35). k = 3 is
 # never hardcoded: it appears only as the normal quantile when
-# the mandatory Gaussianity test passes. KS_SIGNIFICANCE is the
-# test's own named decision; MIN_NOISE_RUNS is the floor below
-# which the test refuses to pretend it measured a distribution.
+# the mandatory Gaussianity test passes, and it stays
+# provisional under the issue #36 cost derivation (an
+# assumption result, not a rule). KS_SIGNIFICANCE is the
+# test's own named decision. The MIN_* floors are the smallest
+# structure the tool accepts: fewer than 3 sessions leaves no
+# spread between session means, fewer than 2 seeds leaves no
+# within-session pair (and the floors imply at least 6 runs,
+# above the issue #35 under-power line of 5). ICC_VERIFIED is
+# the issue #36 named decision: above it the across-session
+# signal carries the variance and stability is verified.
 ALPHA = 0.0027
 KS_SIGNIFICANCE = 0.05
-MIN_NOISE_RUNS = 5
+MIN_SESSIONS = 3
+MIN_SEEDS = 2
+ICC_VERIFIED = 0.5
 
 
 def _max_abs_diff(a, b):
@@ -142,13 +173,14 @@ def _sample_stats(samples):
 
 
 def derive_k(samples):
-    """The issue #35 rule: k = Quantile(noise_dist, 1 - alpha),
-    never a chosen constant. Runs the mandatory Gaussianity test
-    (KS test against a fitted normal, scipy.stats). k = 3 only
-    when the test passes, the empirical quantile of the
-    standardized samples otherwise. Returns (k, test_line);
-    test_line documents the test and the assumption next to the
-    verdict.
+    """The issues #35/#36 rule: k = Quantile(noise_dist,
+    1 - alpha), never a chosen constant. Runs the mandatory
+    Gaussianity test (KS test against a fitted normal,
+    scipy.stats). k = 3 only when the test passes - provisional
+    under the issue #36 cost derivation - and the empirical
+    quantile of the standardized samples otherwise. Returns
+    (k, test_line); test_line documents the test and the
+    assumption next to the verdict.
     """
     import scipy.stats
 
@@ -157,10 +189,12 @@ def derive_k(samples):
     if p >= KS_SIGNIFICANCE:
         k = 3.0
         line = ("gaussianity: KS stat=%.4f, p=%.4f -> PASSED "
-                "(alpha=%.2f); k=3.0 (the 3-sigma convention: "
-                "99.73%% of a Gaussian within +/- 3 sigma, "
-                "alpha=%.2f%% outside - assumption documented)"
-                % (stat, p, KS_SIGNIFICANCE, 100 * ALPHA))
+                "(alpha=%.2f); k=3.0 (the 3-sigma convention - "
+                "provisional under the issue #36 cost "
+                "derivation: an assumption result, not a rule, "
+                "until C_accept/C_reject is measured; "
+                "assumption documented)"
+                % (stat, p, KS_SIGNIFICANCE))
     else:
         z = [(s - mean) / std for s in samples]
         k = _empirical_quantile([abs(v) for v in z], 1.0 - ALPHA)
@@ -171,11 +205,34 @@ def derive_k(samples):
     return k, line
 
 
+def stability(within_samples, across_samples):
+    """The issue #36 decomposition: within-session consistency
+    vs across-session stability. Returns (sigma_within,
+    sigma_across, icc, status), or (None, None, None, reason)
+    when the variance cannot be decomposed and both claims
+    would be undefined. ICC = sigma_across^2 / (sigma_across^2
+    + sigma_within^2); ICC > ICC_VERIFIED = verified,
+    otherwise intermittent (the boundary joins the weaker
+    claim).
+    """
+    _, sigma_within = _sample_stats(within_samples)
+    _, sigma_across = _sample_stats(across_samples)
+    if sigma_within == 0.0 and sigma_across == 0.0:
+        return (None, None, None,
+                "no within- or across-session variance to "
+                "decompose - consistency and stability are both "
+                "undefined")
+    icc = sigma_across ** 2 / (sigma_across ** 2 + sigma_within ** 2)
+    status = "verified" if icc > ICC_VERIFIED else "intermittent"
+    return sigma_within, sigma_across, icc, status
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="HiveMind vs HF parity, judged by a derived "
-        "threshold (k x sigma_model, k from the noise "
-        "distribution).")
+        "threshold (k x max(2 runs) for logits, k from the noise "
+        "distribution; prints the issue #36 stability "
+        "decomposition).")
     parser.add_argument("--hf", required=True,
                         help="HF model id or path: the reference side")
     parser.add_argument("--hive", required=True,
@@ -187,19 +244,25 @@ def main():
     parser.add_argument("--prompt", required=True,
                         help="the prompt both sides run on")
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--noise-runs", type=int, default=8,
-                        help="HF runs used to build the noise "
-                        "distribution (default 8, minimum %d; more "
-                        "runs, stronger test)" % MIN_NOISE_RUNS)
+    parser.add_argument("--sessions", type=int, default=5,
+                        help="judge sessions (default 5, minimum %d; "
+                        "the across-session stability protocol)"
+                        % MIN_SESSIONS)
+    parser.add_argument("--seeds", type=int, default=3,
+                        help="seeds per session (default 3, minimum "
+                        "%d; the within-session consistency "
+                        "protocol)" % MIN_SEEDS)
     parser.add_argument("--max-positions", type=int, default=64,
                         help="cap on prompt tokens compared")
     parser.add_argument("--page-size-mb", type=int, default=1000)
     args = parser.parse_args()
 
-    if args.noise_runs < MIN_NOISE_RUNS:
-        print("judgment refused: %d noise runs is under-powered "
-              "(minimum %d) - an under-powered test rejects nothing"
-              % (args.noise_runs, MIN_NOISE_RUNS), file=sys.stderr)
+    if args.sessions < MIN_SESSIONS or args.seeds < MIN_SEEDS:
+        print("judgment refused: %d sessions x %d seeds is "
+              "under-powered (minimum %d sessions, %d seeds) - an "
+              "under-powered test rejects nothing"
+              % (args.sessions, args.seeds, MIN_SESSIONS,
+                 MIN_SEEDS), file=sys.stderr)
         return 5
 
     try:
@@ -223,44 +286,81 @@ def main():
     if input_ids.size(1) > args.max_positions:
         input_ids = input_ids[:, : args.max_positions]
 
-    # --- the judge measures its own noise before judging ---
+    # --- the judge measures its own noise before judging:
+    # sessions x seeds forwards on the same backend ---
     model = _load_hf(args.hf, args.device)
-    runs = [_hf_forward(model, input_ids.to(args.device))
-            for _ in range(args.noise_runs)]
+    session_runs = []
+    for _ in range(args.sessions):
+        session_runs.append(
+            [_hf_forward(model, input_ids.to(args.device))
+             for _ in range(args.seeds)])
+    flat_runs = [run for runs in session_runs for run in runs]
+    main_logits = flat_runs[0]
 
-    samples = []
-    for i in range(len(runs)):
-        for j in range(i + 1, len(runs)):
-            samples.append(_max_abs_diff(runs[i], runs[j]))
-    main_logits = runs[0]
+    # all pairwise run diffs: the noise distribution
+    run_samples = []
+    for i in range(len(flat_runs)):
+        for j in range(i + 1, len(flat_runs)):
+            run_samples.append(_max_abs_diff(flat_runs[i],
+                                             flat_runs[j]))
 
+    # the issue #36 decomposition: within (same session) and
+    # across (session means)
+    within_samples = []
+    for runs in session_runs:
+        for i in range(len(runs)):
+            for j in range(i + 1, len(runs)):
+                within_samples.append(_max_abs_diff(runs[i],
+                                                    runs[j]))
+    session_means = [torch.stack(runs).mean(dim=0)
+                     for runs in session_runs]
+    across_samples = []
+    for i in range(len(session_means)):
+        for j in range(i + 1, len(session_means)):
+            across_samples.append(_max_abs_diff(session_means[i],
+                                                session_means[j]))
+
+    # cross-backend diffs: printed, pooled into the distribution
+    # the Gaussianity test sees, never part of max(2 runs)
     cross = _cross_backend_samples(args.hf, input_ids, args.device,
                                    main_logits)
-    samples.extend(diff for _, diff in cross)
-
+    pooled_samples = run_samples + [diff for _, diff in cross]
     cross_line = (", ".join("%s=%s" % (label, diff)
                            for label, diff in cross)
                   if cross else "unavailable (no second backend)")
     print("# noise_samples=%d (%d runs), cross: %s"
-          % (len(samples), args.noise_runs, cross_line))
+          % (len(pooled_samples), args.sessions * args.seeds,
+             cross_line))
 
-    noise_floor = max(samples)
-    if noise_floor == 0.0:
+    # noise_measure = max(2 runs): the logits instrument's
+    # measure (issue #36) - same-backend run pairs only
+    noise_measure = max(run_samples)
+    if noise_measure == 0.0:
         print("judgment refused: the judge is bit-identical across "
               "runs - nothing was measured (PRE section 6: an "
               "under-powered tool rejects nothing)", file=sys.stderr)
         return 3
 
-    _, sigma_model = _sample_stats(samples)
-    if sigma_model == 0.0:
+    _, pooled_std = _sample_stats(pooled_samples)
+    if pooled_std == 0.0:
         print("judgment refused: the noise samples are all equal - "
               "a constant is not a distribution, there is nothing "
               "to standardize", file=sys.stderr)
         return 6
 
-    k, test_line = derive_k(samples)
+    sigma_within, sigma_across, icc, outcome = stability(
+        within_samples, across_samples)
+    if sigma_within is None:
+        print("judgment refused: %s" % outcome, file=sys.stderr)
+        return 6
+    stability_status = outcome
+    print("stability: sigma_within=%s, sigma_across=%s, ICC=%s, "
+          "status: %s" % (sigma_within, sigma_across, icc,
+                          stability_status))
+
+    k, test_line = derive_k(pooled_samples)
     print("# " + test_line)
-    threshold = k * sigma_model
+    threshold = k * noise_measure
 
     # --- the examined side: HiveMind, same prompt, same tokens ---
     from hivemind.core.file_pager import FileBackedPager
@@ -287,9 +387,10 @@ def main():
 
     diff = _max_abs_diff(main_logits, hive_logits)
     status = "PASS" if diff <= threshold else "FAIL"
-    print("diff=%s, noise_floor=%s, sigma_model=%s, k=%s, "
-          "threshold=%s, status: %s"
-          % (diff, noise_floor, sigma_model, k, threshold, status))
+    print("diff=%s, noise_measure=%s, sigma_within=%s, "
+          "sigma_across=%s, ICC=%s, k=%s, threshold=%s, status: %s"
+          % (diff, noise_measure, sigma_within, sigma_across, icc,
+             k, threshold, status))
     return 0 if status == "PASS" else 1
 
 

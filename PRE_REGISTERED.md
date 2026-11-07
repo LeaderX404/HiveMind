@@ -145,7 +145,26 @@ B and L1 removed as commitments and kept only as a forward
 reference to RESEARCH_QUESTIONS.md; and the model page
 MODELS.md - the T_token bound over activated bytes, h a
 measured function, h_threshold derived from T_cloud, p50
-and p95 separate), all before
+and p95 separate) and #36 (one law,
+two measures: threshold = k x noise_measure per instrument -
+max(2 runs) for the non-Gaussian logits of parity, std after
+a mandatory Gaussianity test for the potentially Gaussian
+timing of sections 6 and 8, which stay frozen until their
+tools adopt the test; the parity basis moved from sigma_model
+to the extreme statistic, with the non-Gaussian reason
+attached; k derived from cost: k* = k_gaussian + (1/2) x
+ln[((1 - pi) / pi) x (C_accept / C_reject)], approximately
+4.2 under the temporary pi = 0.9 and C_accept / C_reject =
+100 - k = 3 provisional, an assumption result, not a rule,
+until the cost issue measures the ratio; the stability
+protocol: 3 seeds = within-session consistency, 5 sessions x
+3 seeds = across-session stability, ICC = sigma_across^2 /
+(sigma_across^2 + sigma_within^2), ICC > 0.5 verified, ICC <
+0.5 intermittent, never "stable" on consistency alone; and
+RESEARCH_QUESTIONS.md created as the open frontier - Model B
+(kappa), L1 (delta), I_eff, h, H_lang and C_accept / C_reject
+as definitions, open questions and registered hypotheses,
+never commitments), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -390,46 +409,73 @@ post-hoc goal-moving: a published miss is stronger evidence of
 honest measurement than a met target we cannot prove. The
 weaker claim is the stronger product.
 
-## 10. The unified threshold law (issues #34, #35)
+## 10. The unified threshold law (issues #34, #35, #36)
 
 No acceptance threshold in this covenant is a bare constant.
-Every threshold is k x a measured noise quantity, measured on
-the configuration it will judge, with k derived, never assumed:
+One law, not two:
 
-- Parity: threshold = k x sigma_model. The noise is measured
-  by scripts/parity_check.py before any verdict is printed:
-  HF runs --noise-runs times on the same backend, plus every
-  second HF backend that exists - CUDA vs CPU, sdpa vs eager
-  attention - and the pairwise max-abs-diff samples give
-  sigma_model (the threshold basis) and noise_floor (the raw
-  scale, still measured and printed).
-- k is derived, never assumed (issue #35):
+    threshold = k x noise_measure(instrument)
+
+with noise_measure measured on the same configuration the
+threshold will judge. The measure belongs to the instrument,
+because noise is a property of what is measured, not of the
+law:
+
+- Parity (scripts/parity_check.py - logits, non-Gaussian):
+  noise_measure = max(2 runs), the maximum absolute difference
+  between two noise runs. The judge runs --sessions sessions x
+  --seeds seeds (defaults 5 x 3, the issue #36 stability
+  protocol); the pairwise max-abs-diff run samples give the
+  noise distribution and its max, and the session structure
+  decomposes the noise into within-session consistency (3
+  seeds) and across-session stability (5 sessions x 3 seeds):
+  ICC = sigma_across^2 / (sigma_across^2 + sigma_within^2),
+  with ICC > 0.5 = verified and ICC < 0.5 = intermittent - the
+  word "stable" is never claimed on consistency alone
+  (MODELS.md, issue #36).
+- Timing instruments (the reproduction tolerance of section 6
+  and the fragmentation threshold of section 8):
+  noise_measure = std, legitimate only after a Gaussianity
+  test passes - timing noise is potentially Gaussian. Their
+  sections keep their frozen named decisions until their tools
+  adopt the test.
+- k is derived, never assumed (issues #35, #36):
   k = Quantile(noise_dist, 1 - alpha), with a target false
-  rejection rate alpha = 0.27% per test. A Gaussianity test
-  on the noise samples is mandatory - a KS test against a
-  fitted normal (scipy.stats; no scipy, no verdict). If the
-  test passes, k = 3 is legitimate and the normality
-  assumption is documented next to the verdict; if it fails,
-  k comes from the empirical quantile of the standardized
-  samples. A fixed k without a Gaussianity test is a bare
-  constant wearing a lab coat.
-- The tool prints diff, noise_floor, sigma_model, k,
-  threshold and PASS/FAIL, and refuses to judge on a zero
-  noise floor, a zero sigma_model, missing scipy or an
-  under-powered sample count - exactly like the under-powered
-  tool of section 6.
-- The law is unified over every acceptance threshold in this
+  rejection rate alpha = 0.27% per test. The Gaussianity test
+  is mandatory - a KS test against a fitted normal
+  (scipy.stats; no scipy, no verdict). If it passes, k = 3 is
+  legitimate and the normality assumption is documented next
+  to the verdict; if it fails, k comes from the empirical
+  quantile of the standardized samples. A fixed k without a
+  Gaussianity test is a bare constant wearing a lab coat. The
+  cost derivation (MODELS.md, issue #36) moves the boundary to
+  k* = k_gaussian + (1/2) x ln[((1 - pi) / pi) x
+  (C_accept / C_reject)] - approximately 4.2 under the
+  temporary pi = 0.9 and C_accept / C_reject = 100 (definition
+  required, RESEARCH_QUESTIONS.md). Named decision: k = 3
+  stays provisional until C_accept / C_reject is measured in
+  a separate issue; k = 3 is an assumption result, not a
+  rule.
+- The tool prints diff, noise_measure, sigma_within,
+  sigma_across, ICC, the stability status, k, threshold and
+  PASS/FAIL, and refuses to judge on a zero noise measure, a
+  degenerate noise distribution, a noise that cannot be
+  decomposed into within and across, missing scipy, or an
+  under-powered session/seed structure - exactly like the
+  under-powered tool of section 6.
+- The law is one law over every acceptance threshold in this
   covenant: the reproduction tolerance (section 6), the
-  fragmentation threshold (section 8) and the parity
-  threshold above are each k x a measured noise quantity.
-  The parity threshold derives k per the issue #35 rule
-  above; the reproduction tolerance and the fragmentation
-  threshold predate that rule and keep their frozen named
-  decisions under their own amendments until their tools
-  adopt it. When Model B (kappa) and L1 (delta) are defined
-  in RESEARCH_QUESTIONS.md, they will be added to this law
-  with their own derived thresholds. No commitment exists
-  before definition.
+  fragmentation threshold (section 8) and the parity threshold
+  above are each k x a measured noise quantity, with the
+  measure chosen by the instrument. The reproduction tolerance
+  and the fragmentation threshold predate the per-instrument
+  measure and keep their frozen named decisions under their
+  own amendments until their tools adopt it. Model B (kappa)
+  and L1 (delta) are defined in RESEARCH_QUESTIONS.md as open
+  questions and open hypotheses - not commitments; they enter
+  this law with their own derived thresholds when their
+  definitions freeze into commitments, and no commitment
+  exists before then.
 - The rule is mirrored in CONTRIBUTING.md (Unified Threshold
   Rule) so the repository text and this covenant cannot
   drift apart.

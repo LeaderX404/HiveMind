@@ -1,9 +1,9 @@
-# MODELS.md - the model page (issue #35)
+# MODELS.md - the model page (issues #35, #36)
 
 One page. Every symbol on it is either measured or marked as a
 hypothesis; nothing here is a measurement claim. This page
 follows the unified threshold law (PRE_REGISTERED.md section
-10) and the derived-k rule (CONTRIBUTING.md, issue #35).
+10) and the derived-k rule (CONTRIBUTING.md, issues #35, #36).
 
 ## Token time
 
@@ -44,15 +44,66 @@ Declaration: h is a simplification. Generalizing h to other
 domains, other languages or other policies is an open
 hypothesis - neither claimed nor measured here.
 
+## k: derived from cost, not tradition (issue #36)
+
+The 3 in "k = 3" is a Gaussian quantile, and Gaussianity itself
+is only a hypothesis until the noise is tested. The cost
+derivation moves the boundary to where the money is:
+
+    k* = k_gaussian + (1/2) * ln[((1 - pi) / pi) * (C_accept / C_reject)]
+
+- pi = 0.9: the prior probability that a candidate engine is a
+  true parity. Temporary - to be measured later.
+- C_accept / C_reject = 100: the cost of accepting a false
+  parity (a wrong engine ships as verified) over the cost of
+  rejecting a true one (a correct engine is sent back).
+  Temporary - to be measured later; definition required
+  (RESEARCH_QUESTIONS.md).
+- With the temporary numbers, k* is approximately 4.2.
+
+Named decision (issue #36): k = 3 stays provisional until
+C_accept / C_reject is measured in a separate issue.
+
+Declaration: k = 3 is an assumption result, not a rule. The
+cost measurement issue is what would make it one.
+
+## Stability vs consistency (issue #36)
+
+Three seeds in one session are consistency, not stability: they
+show that the engine agrees with itself inside one session, and
+nothing more.
+
+- 3 seeds = within-session consistency.
+- 5 sessions x 3 seeds = across-session stability.
+- ICC = sigma_across^2 / (sigma_across^2 + sigma_within^2),
+  with sigma_within the spread of the within-session pairwise
+  diffs and sigma_across the spread of the session-mean diffs.
+- ICC > 0.5 = verified. ICC < 0.5 = intermittent. The boundary
+  joins the weaker claim, and the word "stable" is never
+  printed on consistency alone.
+- scripts/parity_check.py prints sigma_within, sigma_across,
+  ICC and the stability status next to every verdict.
+
 ## Thresholds on this page
 
-Every threshold follows one law: threshold = k x sigma_model,
-with sigma_model measured on the same configuration the
-threshold will judge, and k derived - k = Quantile(noise_dist,
-1 - alpha), alpha = 0.27% target false rejection per test, with
-the mandatory Gaussianity test of issue #35 deciding between
-the normal quantile (k = 3) and the empirical one. No fixed k,
-no fixed 0.9, no exceptions.
+One law, not two (issues #34, #35, #36):
+
+    threshold = k x noise_measure(instrument)
+
+The measure belongs to the instrument, because noise is a
+property of what is measured, not of the law. For logits
+(parity), noise_measure = max(2 runs) - the maximum absolute
+difference between two noise runs - because logit noise is
+non-Gaussian and the extreme statistic is its honest scale.
+For timing, noise_measure = std, legitimate only after a
+Gaussianity test passes, because timing noise is potentially
+Gaussian. k is derived - k = Quantile(noise_dist, 1 - alpha),
+alpha = 0.27% target false rejection per test, with the
+mandatory Gaussianity test of issue #35 deciding between the
+normal quantile (k = 3) and the empirical one - and k = 3
+stays provisional under the issue #36 cost derivation: an
+assumption result, not a rule. No fixed k, no fixed 0.9, no
+exceptions.
 
 ## Status
 

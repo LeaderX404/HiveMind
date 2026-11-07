@@ -221,34 +221,58 @@ lives under "Planned architectures (layout not implemented)" with
 an open issue, and enters the ledger only after the code can load
 it and a measured parity number is published.
 
-## 📏 Unified Threshold Rule (issues #34, #35)
+## 📏 Unified Threshold Rule (issues #34, #35, #36)
 
-No acceptance threshold is a bare constant. Every threshold is
-k x a measured noise quantity, measured on the same
-configuration the threshold will judge, and k is derived,
-never assumed (issue #35):
+No acceptance threshold is a bare constant. One law, not two:
+
+    threshold = k x noise_measure(instrument)
+
+with noise_measure measured on the same configuration the
+threshold will judge. The measure belongs to the instrument,
+because noise is a property of what is measured, not of the
+law:
+
+- scripts/parity_check.py (logits): noise_measure =
+  max(2 runs) - the maximum absolute difference between two
+  noise runs. Logit noise is non-Gaussian, so the extreme
+  statistic is its honest scale; a std would launder a
+  bounded, extreme-valued distribution into a symmetric
+  fiction.
+- benchmark.py timing tools (the reproduction tolerance and
+  the fragmentation threshold): noise_measure = std -
+  legitimate only after a Gaussianity test passes (a KS test
+  against a fitted normal), because timing noise is
+  potentially Gaussian. Until their tools adopt that test they
+  keep their frozen named decisions.
+
+k is derived, never assumed (issues #35, #36):
 
 - k = Quantile(noise_dist, 1 - alpha), with a target false
-  rejection rate alpha = 0.27% per test.
-- A Gaussianity test on the noise samples is mandatory - a QQ
-  plot or a KS test against a fitted normal.
-  scripts/parity_check.py implements the KS test via
-  scipy.stats and refuses to judge without scipy: no test, no
-  verdict. If the test passes, k = 3 is legitimate and the
-  normality assumption is documented next to the verdict; if
-  it fails, k comes from the empirical distribution of the
-  standardized samples - never the round 3. A fixed k without
-  a Gaussianity test is a bare constant wearing a lab coat.
-- Parity lives under this rule today; the reproduction
-  tolerance and the fragmentation threshold keep their frozen
-  named decisions until their own tools adopt the derived-k
-  rule.
-- When Model B (kappa) and L1 (delta) are defined in
-  RESEARCH_QUESTIONS.md, they will be added to this law with
-  their own derived thresholds. No commitment exists before
-  definition.
+  rejection rate alpha = 0.27% per test. A Gaussianity test
+  on the noise samples is mandatory - a QQ plot or a KS test
+  against a fitted normal. scripts/parity_check.py implements
+  the KS test via scipy.stats and refuses to judge without
+  scipy: no test, no verdict. If the test passes, k = 3 is
+  legitimate and the normality assumption is documented next
+  to the verdict; if it fails, k comes from the empirical
+  distribution of the standardized samples - never the round
+  3. A fixed k without a Gaussianity test is a bare constant
+  wearing a lab coat.
+- The cost derivation (MODELS.md, issue #36) moves the
+  boundary: k* = k_gaussian + (1/2) x ln[((1 - pi) / pi) x
+  (C_accept / C_reject)], approximately 4.2 under the
+  temporary pi = 0.9 and C_accept / C_reject = 100
+  (RESEARCH_QUESTIONS.md: definition required). Named
+  decision: k = 3 stays provisional until C_accept /
+  C_reject is measured in a separate issue. Declaration:
+  k = 3 is an assumption result, not a rule.
 - A threshold that cannot measure its noise refuses to judge;
   it does not fall back to a round number.
+- Model B (kappa) and L1 (delta) are defined in
+  RESEARCH_QUESTIONS.md as open questions and open
+  hypotheses - not commitments. They enter this law with
+  their own derived thresholds when their definitions freeze
+  into commitments; no commitment exists before then.
 
 ## 🎓 Getting Help
 
