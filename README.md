@@ -16,7 +16,7 @@
 - **Tensor Caching**: LRU page cache for loaded tensors to avoid repeated file reads
 - **Performance Monitoring**: Track RAM usage, GPU usage, tokens/sec, and loading times
 - **Refusal at admission**: We refuse at admission if predicted peak > budget. Zero kills under deliberate memory pressure is a measured metric, not a claim (not yet measured).
-- **Model Agnostic**: the transformer layouts of the Llama family, Mistral, Qwen and Phi-2 are implemented; numerical parity with Hugging Face is unmeasured for every model (see the parity table below)
+- **Model Agnostic**: the transformer layouts of the Llama family, Mistral, Qwen and Phi-2 are implemented; numerical parity with Hugging Face is unmeasured for every model (see the parity ledger below)
 
 ## 📦 Installation
 
@@ -151,15 +151,27 @@ print(response)
 - **Integrity verification (optional)**: `DirectFileModelLoader(path, expected_sha256="...")` streams the file through SHA-256 before anything is parsed - a tampered file is rejected up front.
 - **Reference presets (experimental)**: `TransformerConfig.from_preset("50b" | "70b" | "100b")` builds reference configs for 50B-100B class models. Not exercised on hardware (see Experimental).
 
-## 🎯 Model parity (unverified)
+## 🎯 Parity debts (unverified)
+
+This is a ledger, not a claim. No green until measured.
 
 The Llama-family, Mistral, Qwen and Phi-2 layouts are implemented,
-but numerical parity with Hugging Face is unmeasured for every model:
+but numerical parity with Hugging Face is unmeasured for every
+model. Every row below is a debt to be paid with one measured
+line, judged by a threshold that is derived, not chosen:
 
-| Model | Max logit diff vs HF | Status |
-|-------|----------------------|--------|
-| Llama-3.1-8B | (unmeasured) | 🔬 Not verified |
-| Qwen2.5-7B | (unmeasured) | 🔬 Not verified |
+| Model | Parity debt | Target |
+|-------|-------------|--------|
+| Llama-3.1-8B | Owed — see #34 | max logit diff vs HF <= k x noise_floor (k = 3) |
+| Qwen2.5-7B | Owed — see #34 | max logit diff vs HF <= k x noise_floor (k = 3) |
+
+scripts/parity_check.py runs HiveMind and Hugging Face on the same
+prompt, measures the judge's own noise floor (HF twice on the same
+backend, plus a cross-backend run when a second backend exists),
+computes threshold = k x noise_floor, and prints
+"diff=X, noise_floor=Y, threshold=Z, status: PASS/FAIL". k = 3 and
+the formula live in the tool's docstring; every number it prints
+comes out of the measurement. A debt is paid only by that line.
 
 ## 🗺️ Planned architectures (layout not implemented)
 

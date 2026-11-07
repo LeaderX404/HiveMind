@@ -122,7 +122,14 @@ README carries no number without a source) and #33 (the
 missed-target fallback: a miss is published as measured -
 publish, acknowledge, investigate, with no post-hoc target
 adjustment - and the parity rule: the README Parity table
-lists only models the code can load), all before
+lists only models the code can load) and #34 (the unified
+threshold law: parity judged by k x noise_floor measured by
+scripts/parity_check.py - HF run twice, plus a cross-backend
+run when one exists - the README parity section renamed from
+a status table to a debts ledger, and every present and
+future acceptance threshold - reproduction tolerance,
+fragmentation threshold, Model B epsilon, L1 delta -
+required to derive from a measured noise floor), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -356,7 +363,7 @@ deliberate-pressure runs - the miss is published as measured:
 the kill count, the run index, and the memory trace of the
 killed run. The target is not adjusted, N is not re-rolled, and
 the killed run is not discarded. A fix follows the amendment
-rule (section 10): a new amendment, a new seal, and an open
+rule (section 11): a new amendment, a new seal, and an open
 issue announcing the change. No denial, no goal-moving.
 
 ### Why this rule exists (#33)
@@ -367,7 +374,35 @@ post-hoc goal-moving: a published miss is stronger evidence of
 honest measurement than a met target we cannot prove. The
 weaker claim is the stronger product.
 
-## 10. Amendment rule
+## 10. The unified threshold law (issue #34)
+
+No acceptance threshold in this covenant is a bare constant.
+Every threshold is k x noise_floor, measured on the
+configuration it will judge, with k justified in writing:
+
+- Parity: threshold = k x noise_floor. The noise floor is
+  measured by scripts/parity_check.py before any verdict is
+  printed: HF run twice on the same backend
+  (noise_floor_same), plus a second HF backend when one
+  exists - CUDA vs CPU, or sdpa vs eager attention
+  (noise_floor_cross) - and noise_floor = max(both). k = 3
+  by the same 3-sigma logic as section 6 and section 8:
+  0.27% false rejection per test, an accepted price. The
+  tool prints diff, noise_floor, threshold and PASS/FAIL, and
+  with a zero noise floor it refuses to judge, exactly like
+  the under-powered tool of section 6.
+- The law is unified over every acceptance threshold in this
+  covenant: the reproduction tolerance (section 6), the
+  fragmentation threshold (section 8) and the parity
+  threshold above are each k x a measured noise quantity.
+  Thresholds the campaign adds later - Model B epsilon, the
+  L1 ladder delta - are born under this law: derived from a
+  measured noise floor, never chosen as a round number.
+- The rule is mirrored in CONTRIBUTING.md (Unified Threshold
+  Rule) so the repository text and this covenant cannot
+  drift apart.
+
+## 11. Amendment rule
 
 Any edit to this covenant invalidates all prior runs, requires a
 new seal, and an open issue announcing the invalidation - the

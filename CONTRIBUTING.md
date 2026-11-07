@@ -214,12 +214,25 @@ not by keeping them naked.
 
 ## 📏 README Parity Rule (issue #33)
 
-Every model listed in the README Parity table must be loadable by
-the code in this repository. The Parity table is a record of
-results, not promises: a model whose layout is not implemented
+Every model listed in the README Parity debts ledger must be
+loadable by the code in this repository. The ledger is a record
+of results, not promises: a model whose layout is not implemented
 lives under "Planned architectures (layout not implemented)" with
-an open issue, and enters the table only after the code can load
+an open issue, and enters the ledger only after the code can load
 it and a measured parity number is published.
+
+## 📏 Unified Threshold Rule (issue #34)
+
+No acceptance threshold is a bare constant. Every threshold is
+k x noise_floor: the noise floor is measured on the same
+configuration the threshold will judge, and k carries a written
+justification (k = 3: 0.27% false rejection per test - the same
+named decision as REPRODUCE_K and the fragmentation threshold).
+Parity, the reproduction tolerance, the fragmentation threshold
+and any threshold added later (Model B epsilon, an L1 ladder
+delta) all live under this law. A threshold that cannot measure
+its noise floor refuses to judge; it does not fall back to a
+round number.
 
 ## 🎓 Getting Help
 
