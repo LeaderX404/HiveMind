@@ -61,6 +61,8 @@ Usage:
   python benchmark.py --serve --port 50051 --shard-gb 0.2
   python benchmark.py --verdict single.json swarm.json
   python benchmark.py --calibrate-shard --calibrate-step-gb 0.25
+  python benchmark.py --live-capture-gate
+  python benchmark.py --coverage-audit
   python benchmark.py --record-trace --trace-path trace.json --model-gb 15 --shards 3 --tokens 64
   python benchmark.py --replay-calibrate --trace-path trace.json --calibrate-step-gb 0.25
   python benchmark.py --stage 1 --variance-report 10 --paired --report noise.json
@@ -206,6 +208,16 @@ LIVE_INJECT_TOLERANCE_CUDA = 0.01
 LIVE_INJECT_TOLERANCE_CPU = 0.05
 LIVE_PROBE_SIZES = [4096, 8192, 16384, 32768, 65536, 131072,
                     262144, 524288, 1048576, 2097152]
+#
+# Coverage audit (amendment #29): the audit is not a control -
+# controls judge the representation, the audit matches the
+# journal against reality. Two probes, both prescribed by issue
+# #29: one allocation on the covered path (torch.empty, the path
+# the recorder claims) and one on an uncovered path (torch.zeros)
+# that must be seen by the audit instrument and missed by the
+# journal - the blind spot measured, not declared.
+AUDIT_COVERED_BYTES = 2 * 1024 ** 2
+AUDIT_UNCOVERED_BYTES = 1 * 1024 ** 2
 
 
 class MockContext:
@@ -816,6 +828,141 @@ def live_capture_gate() -> bool:
     return True
 
 
+def coverage_audit_gate() -> bool:
+    """Match the journal against reality, not against a story (#29).
+
+    The audit is not a control: controls judge the representation,
+    the audit compares what happened with what was journaled. The
+    instrument itself is tried first - expectation is not
+    evidence, so tracemalloc is tried even though PyTorch CPU
+    allocations are expected to bypass the Python allocator, and
+    the trial verdict is recorded either way. A judge that cannot
+    see a known allocation is blind, and an audit whose instrument
+    is unverified audits nothing. The recorder's uncovered path
+    is then MEASURED and printed as a number - a boundary with a
+    size, not a docstring claim.
+    """
+    print("coverage audit: the journal against reality")
+    # (1) instrument trial: tracemalloc first
+    import tracemalloc
+    tracemalloc.start()
+    trial = torch.empty(AUDIT_UNCOVERED_BYTES, dtype=torch.uint8)
+    trial[0] = 1
+    _, trial_peak = tracemalloc.get_traced_memory()
+    del trial
+    tracemalloc.stop()
+    instrument = None
+    if trial_peak >= AUDIT_UNCOVERED_BYTES:
+        instrument = "tracemalloc"
+        print("  instrument trial: tracemalloc sees PyTorch CPU "
+              "allocations - recorded, tracemalloc accepted as "
+              "the audit instrument")
+    else:
+        print("  instrument trial: tracemalloc is blind to PyTorch "
+              "CPU allocations (they bypass the Python allocator) "
+              "- recorded; trying torch.profiler")
+        try:
+            from torch.profiler import profile, ProfilerActivity
+        except ImportError:
+            print("  coverage audit FAIL (instrument): no "
+                  "torch.profiler in this build - no reliable "
+                  "audit path, refusing")
+            return False
+        with profile(activities=[ProfilerActivity.CPU],
+                     profile_memory=True) as prof:
+            probe = torch.empty(AUDIT_UNCOVERED_BYTES,
+                                dtype=torch.uint8)
+            probe[0] = 1
+        del probe
+        if not [ev for ev in prof.events()
+                if (getattr(ev, "self_cpu_memory_usage", 0) or 0)
+                >= AUDIT_UNCOVERED_BYTES]:
+            print("  coverage audit FAIL (instrument): "
+                  "torch.profiler cannot see a known "
+                  f"{AUDIT_UNCOVERED_BYTES}-byte CPU allocation")
+            print("  refusing: an audit whose instrument is "
+                  "unverified audits nothing - a fake audit is "
+                  "worse than none")
+            return False
+        instrument = "torch.profiler"
+        print("  instrument trial: torch.profiler sees the known "
+              "allocation - accepted as the audit instrument")
+    # (2) the audit window: one known allocation on the covered
+    # path (torch.empty - the path the recorder claims) and one
+    # on an uncovered path (torch.zeros), journaled by the
+    # recorder and witnessed by the accepted instrument at the
+    # same time
+    recorder = _LiveRecorder()
+    if instrument == "tracemalloc":
+        tracemalloc.start()
+        snap1 = tracemalloc.take_snapshot()
+        with recorder:
+            covered = torch.empty(AUDIT_COVERED_BYTES,
+                                  dtype=torch.uint8)
+            covered[0] = 1
+            uncovered = torch.zeros(AUDIT_UNCOVERED_BYTES,
+                                    dtype=torch.uint8)
+            uncovered[0] = 1
+        snap2 = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        # the window's known allocations are all >=
+        # AUDIT_UNCOVERED_BYTES; smaller diffs are interpreter
+        # noise, excluded by this declared filter
+        reality = [st.size for st in snap2.compare_to(snap1, "lineno")
+                   if st.size >= AUDIT_UNCOVERED_BYTES]
+    else:
+        from torch.profiler import profile, ProfilerActivity
+        with profile(activities=[ProfilerActivity.CPU],
+                     profile_memory=True) as prof:
+            with recorder:
+                covered = torch.empty(AUDIT_COVERED_BYTES,
+                                      dtype=torch.uint8)
+                covered[0] = 1
+                uncovered = torch.zeros(AUDIT_UNCOVERED_BYTES,
+                                        dtype=torch.uint8)
+                uncovered[0] = 1
+        reality = [ev.self_cpu_memory_usage for ev in prof.events()
+                   if (getattr(ev, "self_cpu_memory_usage", 0) or 0) > 0
+                   and ev.name.startswith("aten::")]
+    del covered, uncovered
+    journal = [ev["bytes"] for ev in recorder.events
+               if ev["op"] == "alloc"]
+    # (3) the journal must be a subset of reality: a journaled
+    # allocation that the instrument cannot corroborate is fiction
+    remaining = list(reality)
+    for nbytes in journal:
+        if nbytes in remaining:
+            remaining.remove(nbytes)
+        else:
+            print("  coverage audit FAIL (journal vs reality): "
+                  f"the journal recorded {nbytes} bytes that "
+                  "reality does not corroborate")
+            return False
+    if journal != [AUDIT_COVERED_BYTES]:
+        print("  coverage audit FAIL (covered path): the journal "
+              f"must witness the covered allocation of "
+              f"{AUDIT_COVERED_BYTES} bytes exactly, witnessed "
+              f"{journal}")
+        return False
+    # (4) the boundary measured, not declared: exactly the known
+    # uncovered-path allocation must escape the journal
+    if remaining != [AUDIT_UNCOVERED_BYTES]:
+        print("  coverage audit FAIL (boundary): expected exactly "
+              f"the uncovered allocation of {AUDIT_UNCOVERED_BYTES} "
+              f"bytes to escape the journal, reality kept "
+              f"{remaining}")
+        return False
+    print("  coverage audit PASS: instrument tried first "
+          f"({instrument}), every journaled allocation "
+          "corroborated by reality, boundary measured: 1 "
+          f"allocation of {AUDIT_UNCOVERED_BYTES} bytes on an "
+          "uncovered path (torch.zeros) escaped the journal")
+    print("  trace contract: a single allocation on a path the "
+          "real pattern exercises that the journal does not "
+          "claim rejects the trace")
+    return True
+
+
 def replay_calibrate(trace_path: str, step_gb: float,
                      capture_gate: bool = False,
                      noise_report: str = "",
@@ -1383,6 +1530,8 @@ def main():
                         help="allocation trace journal path (record and replay)")
     parser.add_argument("--replay-calibrate", action="store_true",
                         help="pattern-aware max usable shard memory by trace-replay OOM-stepping (gates on THIS)")
+    parser.add_argument("--coverage-audit", action="store_true",
+                        help="match the journal against reality before any trace: instrument tried first (tracemalloc expected blind to PyTorch CPU allocations, then torch.profiler must see a known one), journal corroborated entry by entry, uncovered path measured (mandatory with --record-trace) (#29)")
     parser.add_argument("--live-capture-gate", action="store_true",
                         help="judge the recorder IN TIME: positive live capture, negative live (zero records outside the window), live determinism (#27)")
     parser.add_argument("--trace-capture-gate", action="store_true",
@@ -1421,7 +1570,19 @@ def main():
         save_report(result, args.report)
         return
 
+    if args.coverage_audit:
+        if not coverage_audit_gate():
+            raise SystemExit("REJECTED: coverage audit failed (amendment #29)")
+        print("coverage audit: PASS - traces may now be recorded")
+        return
+
     if args.record_trace:
+        if not coverage_audit_gate():
+            raise SystemExit(
+                "REJECTED: coverage audit failed (amendment #29) - a "
+                "trace may not be recorded while the journal and "
+                "reality disagree"
+            )
         result = record_alloc_trace(
             args.model_gb, args.shards, args.tokens, args.in_features,
             args.trace_path,
@@ -1434,6 +1595,16 @@ def main():
             raise SystemExit("REJECTED: live capture gate failed (amendment #27)")
         print("live capture gate: PASS - the recorder may now capture real traces")
         return
+
+    if args.trace_capture_gate:
+        if not live_capture_gate():
+            raise SystemExit(
+                "REJECTED: live capture gate failed (amendment #27) - "
+                "the static gate refuses to judge a trace whose "
+                "recorder was never judged in time"
+            )
+        print("live capture gate: PASS - order prerequisite of the "
+              "static capture gate")
 
     if args.trace_capture_gate and not args.replay_calibrate:
         with open(args.trace_path) as f:
