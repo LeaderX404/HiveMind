@@ -1,11 +1,14 @@
-"""HiveMind launcher - the double-click entry (issues #41, #42).
+"""HiveMind launcher - the double-click entry (issues #41, #42, #44).
 
 Frozen by PyInstaller this module is the body of HiveMind.exe:
 it starts the Streamlit server on a free local port, opens the
 default browser once the server answers, and keeps the process
 alive until the server dies. The build is windowed - no console
 - so stdout and stderr are redirected to a log file first: a
-silent failure is the one failure we never allow.
+silent failure is the one failure we never allow. Issue #44:
+frozen builds write launcher.log next to the exe (not in
+~/.hivemind), and the Debug target (HiveMind-Debug.exe) keeps
+a console so the first crash is printed, not buried.
 
 Wave #42: a system tray icon owns the taskbar after the browser
 closes - "Open HiveMind" reopens the app, "Quit" ends the
@@ -21,15 +24,31 @@ import time
 import webbrowser
 
 LOG_DIR = os.path.join(os.path.expanduser("~"), ".hivemind")
-LOG_PATH = os.path.join(LOG_DIR, "launcher.log")
+
+
+def _debug_build():
+    """True for the HiveMind-Debug.exe target (issue #44): the
+    console build prints straight to the black window."""
+    return "debug" in os.path.basename(sys.executable).lower()
+
+
+def _log_path():
+    """launcher.log lives next to the exe in frozen builds so
+    the user always finds it (issue #44); dev runs keep
+    ~/.hivemind/launcher.log."""
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(sys.executable),
+                            "launcher.log")
+    return os.path.join(LOG_DIR, "launcher.log")
 PREFERRED_PORT = 8501
 START_TIMEOUT_SECONDS = 120
 
 
 def _redirect_output():
     """Windowed exes have no console: give every print a home."""
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log = open(LOG_PATH, "a", buffering=1, encoding="utf-8")
+    log_path = _log_path()
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log = open(log_path, "a", buffering=1, encoding="utf-8")
     sys.stdout = log
     sys.stderr = log
     sys.__stdout__ = log
@@ -141,7 +160,10 @@ def _run_tray(url, port):
 
 def main():
     """Start the server, open the browser, hold the tray."""
-    _redirect_output()
+    if _debug_build():
+        print("launcher: debug build - output stays on this console")
+    else:
+        _redirect_output()
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass and meipass not in sys.path:
         sys.path.insert(0, meipass)

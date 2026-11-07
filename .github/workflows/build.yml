@@ -69,6 +69,16 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      # Debug build (issue #44): artifact only - the black
+      # window prints the traceback that kills the windowed exe.
+      - name: Upload HiveMind-Debug.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HiveMind-Debug-windows-x64
+          path: dist/HiveMind-Debug.exe
+          retention-days: 30
+          if-no-files-found: error
+
   publish-release:
     name: Publish the public release
     needs: build-windows

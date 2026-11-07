@@ -10,7 +10,10 @@ page exactly as they shipped.
 Each release carries two files: HiveMind.exe (standalone, just
 double-click) and HiveMind-Setup.exe (installer: per-user
 folder, desktop and Start menu shortcuts, clean uninstaller).
+A console build (HiveMind-Debug.exe) is built every run and
+uploaded as an Actions artifact only - it prints the real
+traceback when something dies.
 The classic tag path (v*) still works and adds generated
 release notes.
 
-version: v0.1.1
+version: v0.1.2
