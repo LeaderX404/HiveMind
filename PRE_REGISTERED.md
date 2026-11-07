@@ -109,7 +109,10 @@ it measures, and the fragmentation threshold is derived
 from sigma_noise - the chosen 10% is dead) and #27 (the
 recorder judged in time: a live capture gate before the static
 one, on-device injection with declared tolerances, and an
-extension rule for LIVE_TAGS) and #29 (the blind spot measured: a coverage audit matching the journal against reality before any trace is recorded, and the ladder judged by a linter, not a gate), all before
+extension rule for LIVE_TAGS) and #29 (the blind spot measured: a coverage audit matching the journal against reality before any trace is recorded, and the ladder judged by a linter, not a gate) and #30 (the ladder enforced at runtime: every gate
+refuses without its predecessor passed in the same invocation -
+the linter guards the text, the enforcement test guards the
+behavior), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -263,9 +266,16 @@ The recorder's boundary is measured, not declared. Three rules:
    allocation must escape the journal, and the escape is printed
    as a measured size.
 
-Wiring: --record-trace refuses unless the audit passed in the
-same invocation, and --trace-capture-gate refuses unless the live
-gate passed in the same invocation. A single allocation on a
+Wiring: --record-trace refuses unless BOTH the live gate and
+the coverage audit passed in the same invocation - and the two
+gates are EXECUTED inside that invocation, not merely named;
+--trace-capture-gate refuses unless the audit passed in the same
+invocation, executing the audit and the live gate with it;
+--replay-calibrate inherits the whole chain through
+--trace-capture-gate (amendment #30: a predecessor's flag means
+its gate EXECUTES in the same invocation - a stage that names a
+predecessor carries that predecessor's flag or refuses before
+doing anything). A single allocation on a
 path the real pattern exercises that the journal does not claim
 rejects the trace.
 
@@ -279,6 +289,13 @@ prerequisite (order). The stopping rule is the Gate Law in
 CONTRIBUTING.md: every gate needs a named decision and a public
 issue; no named decision, no gate. Gates are added by decision,
 never by anxiety.
+
+The linter guards the TEXT; the behavior is guarded by
+test_ladder_enforcement.py (amendment #30): every gate refuses,
+loudly and nonzero, when its predecessor has not passed in the
+same invocation - on a CI runner and on a real device alike,
+because the refusals fire at invocation level before any
+hardware is touched.
 
 ## 8. Fragmentation threshold - derived, never chosen
 
