@@ -63,7 +63,7 @@ Usage:
   python benchmark.py --calibrate-shard --calibrate-step-gb 0.25
   python benchmark.py --live-capture-gate
   python benchmark.py --coverage-audit
-  python benchmark.py --record-trace --trace-path trace.json --model-gb 15 --shards 3 --tokens 64
+  python benchmark.py --record-trace --live-capture-gate --trace-path trace.json --model-gb 15 --shards 3 --tokens 64
   python benchmark.py --replay-calibrate --trace-path trace.json --calibrate-step-gb 0.25
   python benchmark.py --stage 1 --variance-report 10 --paired --report noise.json
   python benchmark.py --reproduce-tolerance noise.json their_noise.json
@@ -1553,6 +1553,23 @@ def main():
                         metavar=("SINGLE_JSON", "SWARM_JSON"))
     args = parser.parse_args()
 
+    # Amendment #30: the ladder enforced at invocation level. A
+    # predecessor's flag means its gate EXECUTES in this same
+    # invocation; a stage that names a predecessor carries that
+    # predecessor's flag or refuses before doing anything.
+    if args.record_trace and not args.live_capture_gate:
+        parser.error(
+            "--record-trace needs --live-capture-gate in the same "
+            "invocation (#30): the recorder must be judged in time "
+            "before it journals"
+        )
+    if args.trace_capture_gate and not args.coverage_audit:
+        parser.error(
+            "--trace-capture-gate needs --coverage-audit in the "
+            "same invocation (#30): the instrument must be verified "
+            "before the journal is judged"
+        )
+
     if args.anchor:
         anchor_verdict(args.anchor[0], args.anchor[1])
         return
@@ -1582,6 +1599,12 @@ def main():
                 "REJECTED: coverage audit failed (amendment #29) - a "
                 "trace may not be recorded while the journal and "
                 "reality disagree"
+            )
+        if not live_capture_gate():
+            raise SystemExit(
+                "REJECTED: live capture gate failed (amendment #30) - "
+                "a trace may not be journaled by a recorder that was "
+                "never judged in time"
             )
         result = record_alloc_trace(
             args.model_gb, args.shards, args.tokens, args.in_features,
