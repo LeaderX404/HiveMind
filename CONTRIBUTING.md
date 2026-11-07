@@ -212,6 +212,15 @@ either (a) a published measurement behind it, or (b) an explicit
 rule by deleting its unmeasured numbers or by labeling them -
 not by keeping them naked.
 
+## 📏 README Parity Rule (issue #33)
+
+Every model listed in the README Parity table must be loadable by
+the code in this repository. The Parity table is a record of
+results, not promises: a model whose layout is not implemented
+lives under "Planned architectures (layout not implemented)" with
+an open issue, and enters the table only after the code can load
+it and a measured parity number is published.
+
 ## 🎓 Getting Help
 
 If you need help:

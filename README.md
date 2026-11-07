@@ -160,7 +160,17 @@ but numerical parity with Hugging Face is unmeasured for every model:
 |-------|----------------------|--------|
 | Llama-3.1-8B | (unmeasured) | 🔬 Not verified |
 | Qwen2.5-7B | (unmeasured) | 🔬 Not verified |
-| Phi-3.5-mini | (unmeasured) | 🔬 Not verified |
+
+## 🗺️ Planned architectures (layout not implemented)
+
+Models we intend to support but cannot load today. The Phi-3.5
+layout is not implemented in this repository (the implemented
+layouts are the Llama family, Mistral, Qwen and Phi-2), so
+Phi-3.5-mini cannot be loaded. Implementation and a measured
+max-logit-diff parity test are tracked in
+[#33](https://github.com/LeaderX404/HiveMind/issues/33). A model
+enters the Parity table only after the code can load it and a
+measured parity number is published.
 
 ## 🧪 Experimental
 

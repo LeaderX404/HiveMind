@@ -118,7 +118,11 @@ deliberate memory pressure protocol - stress-ng pressing the
 device while generation runs simultaneously, N = 20 runs,
 median and p95, false acceptance target 0, false rejection
 rate published - all frozen before any measurement, and the
-README carries no number without a source), all before
+README carries no number without a source) and #33 (the
+missed-target fallback: a miss is published as measured -
+publish, acknowledge, investigate, with no post-hoc target
+adjustment - and the parity rule: the README Parity table
+lists only models the code can load), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -344,6 +348,24 @@ CONTRIBUTING.md polices every number, comparison and absolute
 word. No fourth kind here either: every constant above is (a)
 derived from a named decision or (b) to be measured and
 recorded when the campaign runs.
+
+### Fallback if the target is missed (#33)
+
+If a target above is missed - a kill occurs within the N = 20
+deliberate-pressure runs - the miss is published as measured:
+the kill count, the run index, and the memory trace of the
+killed run. The target is not adjusted, N is not re-rolled, and
+the killed run is not discarded. A fix follows the amendment
+rule (section 10): a new amendment, a new seal, and an open
+issue announcing the change. No denial, no goal-moving.
+
+### Why this rule exists (#33)
+
+Adjusting the target after seeing the data is a dishonest
+measurement by definition. The covenant exists to forbid
+post-hoc goal-moving: a published miss is stronger evidence of
+honest measurement than a met target we cannot prove. The
+weaker claim is the stronger product.
 
 ## 10. Amendment rule
 
