@@ -1,4 +1,4 @@
-"""HiveMind launcher - the double-click entry (issue #41, wave #41).
+"""HiveMind launcher - the double-click entry (issues #41, #42).
 
 Frozen by PyInstaller this module is the body of HiveMind.exe:
 it starts the Streamlit server on a free local port, opens the
@@ -6,6 +6,12 @@ default browser once the server answers, and keeps the process
 alive until the server dies. The build is windowed - no console
 - so stdout and stderr are redirected to a log file first: a
 silent failure is the one failure we never allow.
+
+Wave #42: a system tray icon owns the taskbar after the browser
+closes - "Open HiveMind" reopens the app, "Quit" ends the
+process on purpose, so nothing ghosts in Task Manager. Without
+pystray (plain dev runs) the launcher falls back to the old
+heartbeat loop.
 """
 import os
 import socket
@@ -81,8 +87,60 @@ def _server_thread(app_path, failed):
         failed.append("%s: %s" % (type(exc).__name__, exc))
 
 
+def _tray_image():
+    """Draw the tray icon at runtime - a green tile with an H -
+    no binary asset to forget in the bundle."""
+    from PIL import Image, ImageDraw
+    image = Image.new("RGB", (64, 64), (31, 127, 55))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((8, 8, 55, 55), outline=(255, 255, 255), width=3)
+    draw.text((24, 20), "H", fill=(255, 255, 255))
+    return image
+
+
+def _watch_server(port, icon):
+    """End the tray when the server dies: no dead-app ghost."""
+    while _port_answers(port):
+        time.sleep(2.0)
+    print("launcher: server stopped while the tray was up")
+    try:
+        icon.stop()
+    except Exception:
+        pass
+
+
+def _run_tray(url, port):
+    """Own the main thread with the tray icon. False when pystray
+    is unavailable (dev runs) - the caller falls back."""
+    try:
+        import pystray
+    except ImportError:
+        print("launcher: pystray missing - no tray icon this run")
+        return False
+
+    def _reopen(icon, item):
+        print("launcher: reopen requested from the tray")
+        webbrowser.open(url)
+
+    def _quit(icon, item):
+        print("launcher: quit requested from the tray")
+        icon.stop()
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Open HiveMind", _reopen),
+        pystray.MenuItem("Quit", _quit),
+    )
+    icon = pystray.Icon("HiveMind", _tray_image(), "HiveMind", menu)
+    threading.Thread(target=_watch_server, args=(port, icon),
+                     daemon=True).start()
+    print("launcher: tray icon ready")
+    icon.run()
+    print("launcher: tray stopped, exiting")
+    return True
+
+
 def main():
-    """Start the server, open the browser, keep the process alive."""
+    """Start the server, open the browser, hold the tray."""
     _redirect_output()
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass and meipass not in sys.path:
@@ -111,6 +169,11 @@ def main():
     url = "http://localhost:%d" % port
     print("launcher: server up, opening %s" % url)
     webbrowser.open(url)
+    try:
+        if _run_tray(url, port):
+            return 0
+    except Exception as exc:
+        print("launcher: tray failed (%s) - heartbeat fallback" % exc)
     while not failed and _port_answers(port):
         time.sleep(2.0)
     if failed:

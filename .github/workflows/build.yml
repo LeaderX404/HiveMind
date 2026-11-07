@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
-          pip install streamlit pyinstaller
+          pip install streamlit pyinstaller pystray Pillow
 
       - name: Generate protobuf files
         run: |
@@ -45,6 +45,36 @@ jobs:
           path: dist/HiveMind.exe
           retention-days: 30
           if-no-files-found: error
+
+  publish-release:
+    name: Publish the public release
+    needs: build-windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download HiveMind.exe
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-windows-x64
+          path: dist/
+
+      - name: Publish or refresh the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(grep '^version:' RELEASE.md | head -1 | sed 's/^version:[[:space:]]*//')
+          if [ -z "$version" ]; then
+            echo "RELEASE.md has no version - nothing to publish"
+            exit 1
+          fi
+          echo "publishing $version"
+          gh release view "$version" || gh release create "$version" --title "HiveMind $version" --notes "Standalone Windows build. Download HiveMind.exe, double-click - nothing else to install."
+          gh release upload "$version" dist/HiveMind.exe --clobber
 
   release-windows:
     name: Attach HiveMind.exe to the release
@@ -64,5 +94,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: dist/HiveMind.exe
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

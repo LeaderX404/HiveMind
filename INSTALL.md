@@ -13,8 +13,9 @@
   "More info" -> "Run anyway".
 - Models download to your .hivemind/models folder on first use,
   from inside the app.
-- To quit: close the browser tab and end "HiveMind" in Task
-  Manager - there is no console window by design.
+- While the app runs, a green HiveMind icon sits in the system
+  tray. To quit: right-click it and choose Quit. Task Manager
+  is the last resort - there is no console window by design.
 - Problems? The launcher writes the truth to
   .hivemind/launcher.log. Need help? Open an issue.
 

@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec: build the standalone HiveMind.exe
-# (issue #41, wave #41). One file, windowed - no console - and
+# (issues #41 and #42). One file, windowed - no console - and
 # everything inside: the Python interpreter, streamlit, torch,
-# transformers, huggingface_hub. The user installs nothing.
+# transformers, huggingface_hub, pystray. The user installs
+# nothing.
 import os
 import sys
 
@@ -17,7 +18,8 @@ hiddenimports = []
 # Runtime packages with dynamic imports: collected whole so the
 # exe never says "module not found" on a user machine.
 for package in ("streamlit", "transformers", "huggingface_hub",
-                "tokenizers", "safetensors", "sentencepiece"):
+                "tokenizers", "safetensors", "sentencepiece",
+                "pystray", "PIL"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     datas += pkg_datas
     binaries += pkg_binaries
