@@ -77,14 +77,16 @@ assumed.
 
 ## C_accept / C_reject - definition required
 
-The cost ratio of the k derivation (MODELS.md, issue #36):
+The cost ratio of the k derivation (MODELS.md, issues #36
+and #37):
 C_accept is the cost of accepting a false parity (a wrong
 engine ships as verified); C_reject is the cost of rejecting a
-true one (a correct engine is sent back). Both are
-placeholders (ratio = 100) until they are defined and measured
-in a separate issue. That issue must name whose costs they
-are and in what units, before any k* computed from them
-replaces the provisional k = 3.
+true one (a correct engine is sent back). Issue #37
+declared the ratio 100 as a business commitment (README's
+Verification commitment section): declared, not measured. The
+definition and measurement stay open until a separate issue
+names whose costs they are and in what units, before any k*
+computed from them replaces the provisional k = 3.
 
 ## Status
 

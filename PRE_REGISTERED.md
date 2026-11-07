@@ -164,7 +164,20 @@ protocol: 3 seeds = within-session consistency, 5 sessions x
 RESEARCH_QUESTIONS.md created as the open frontier - Model B
 (kappa), L1 (delta), I_eff, h, H_lang and C_accept / C_reject
 as definitions, open questions and registered hypotheses,
-never commitments), all before
+never commitments) and #37 (the cost
+ratio declared: C_accept / C_reject = 100 is a business
+commitment (README's Verification commitment section), not
+a measurement - k* approximately 4.2 under the temporary
+pi = 0.9, k = 3 used as a temporary assumption explicitly
+weaker than the declared commitment, the gap documented;
+the README edit rule added to CONTRIBUTING (drift
+corrections only, declared in the commit message, no new
+claims, thresholds or comparisons); and the stability gate
+hardened: ICC_mean, ICC_quantile (the spread of the
+per-session p95s) and max_session_shift - "stable" only
+when ICC_mean > 0.5 and ICC_quantile > 0.5 and
+max_session_shift < k x sigma_within, otherwise
+"intermittent or outlier"), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -429,17 +442,23 @@ law:
   noise distribution and its max, and the session structure
   decomposes the noise into within-session consistency (3
   seeds) and across-session stability (5 sessions x 3 seeds):
-  ICC = sigma_across^2 / (sigma_across^2 + sigma_within^2),
-  with ICC > 0.5 = verified and ICC < 0.5 = intermittent - the
-  word "stable" is never claimed on consistency alone
-  (MODELS.md, issue #36).
+  ICC_mean = sigma_across^2 / (sigma_across^2 +
+  sigma_within^2), ICC_quantile = sigma_p95_across^2 /
+  (sigma_p95_across^2 + sigma_within^2) with sigma_p95_across
+  the spread of the per-session p95s, and max_session_shift
+  the largest session-mean shift from the overall mean. The
+  verdict is "stable" only when ICC_mean > 0.5 AND
+  ICC_quantile > 0.5 AND max_session_shift < k x sigma_within
+  (issue #37); anything else is "intermittent or outlier" -
+  the word "stable" is never claimed on consistency alone
+  (MODELS.md, issues #36, #37).
 - Timing instruments (the reproduction tolerance of section 6
   and the fragmentation threshold of section 8):
   noise_measure = std, legitimate only after a Gaussianity
   test passes - timing noise is potentially Gaussian. Their
   sections keep their frozen named decisions until their tools
   adopt the test.
-- k is derived, never assumed (issues #35, #36):
+- k is derived, never assumed (issues #35, #36, #37):
   k = Quantile(noise_dist, 1 - alpha), with a target false
   rejection rate alpha = 0.27% per test. The Gaussianity test
   is mandatory - a KS test against a fitted normal
@@ -451,18 +470,23 @@ law:
   cost derivation (MODELS.md, issue #36) moves the boundary to
   k* = k_gaussian + (1/2) x ln[((1 - pi) / pi) x
   (C_accept / C_reject)] - approximately 4.2 under the
-  temporary pi = 0.9 and C_accept / C_reject = 100 (definition
-  required, RESEARCH_QUESTIONS.md). Named decision: k = 3
-  stays provisional until C_accept / C_reject is measured in
-  a separate issue; k = 3 is an assumption result, not a
-  rule.
+  temporary pi = 0.9 and C_accept / C_reject = 100 (declared as a
+  business commitment by README's Verification commitment
+  section, issue #37: a declaration, not a measurement; the
+  definition and measurement stay open,
+  RESEARCH_QUESTIONS.md). Named decision: k = 3 stays
+  provisional - explicitly weaker than the declared
+  commitment; the gap is documented, not hidden - until
+  C_accept / C_reject is measured in a separate issue; k = 3
+  is an assumption result, not a rule.
 - The tool prints diff, noise_measure, sigma_within,
-  sigma_across, ICC, the stability status, k, threshold and
-  PASS/FAIL, and refuses to judge on a zero noise measure, a
-  degenerate noise distribution, a noise that cannot be
-  decomposed into within and across, missing scipy, or an
-  under-powered session/seed structure - exactly like the
-  under-powered tool of section 6.
+  sigma_across, ICC_mean, ICC_quantile, max_session_shift,
+  the stability status, k, threshold and PASS/FAIL, and
+  refuses to judge on a zero noise measure, a degenerate
+  noise distribution, a noise that cannot be decomposed into
+  within and across, missing scipy, or an under-powered
+  session/seed structure - exactly like the under-powered
+  tool of section 6.
 - The law is one law over every acceptance threshold in this
   covenant: the reproduction tolerance (section 6), the
   fragmentation threshold (section 8) and the parity threshold
@@ -478,7 +502,11 @@ law:
   exists before then.
 - The rule is mirrored in CONTRIBUTING.md (Unified Threshold
   Rule) so the repository text and this covenant cannot
-  drift apart.
+  drift apart, and the README edit rule (CONTRIBUTING.md,
+  issue #37) governs README corrections: without their own
+  issue only a declared drift correction - removing text
+  that contradicts a pre-registered law, adding no new
+  claims, thresholds or comparisons.
 
 ## 11. Amendment rule
 

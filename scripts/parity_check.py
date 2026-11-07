@@ -2,7 +2,7 @@
 """
 Parity checker: HiveMind vs Hugging Face, judged by a threshold
 the tool derives from its own measurement (covenant issues #34,
-#35 and #36).
+#35, #36 and #37).
 
 One law, not two (issue #36):
 
@@ -26,12 +26,22 @@ The judge runs --sessions sessions x --seeds seeds HF forwards
                      stability)
     sigma_within   = std(within samples)
     sigma_across   = std(across samples)
-    ICC            = sigma_across^2 / (sigma_across^2 +
+    ICC_mean       = sigma_across^2 / (sigma_across^2 +
                      sigma_within^2)
-    ICC > 0.5      = verified; ICC < 0.5 = intermittent (the
-                     boundary joins the weaker claim; the word
-                     "stable" is never printed on consistency
-                     alone)
+    per-session p95 = the p95 of each session's within diffs;
+                     sigma_p95_across = std(per-session p95s)
+    ICC_quantile   = sigma_p95_across^2 / (sigma_p95_across^2 +
+                     sigma_within^2) - the quantile test that a
+                     mean-shift alone can hide
+    max_session_shift = the largest session-mean shift from
+                     the overall mean of the within diffs
+
+The verdict is "stable" only when ALL THREE gates hold
+(issue #37): ICC_mean > 0.5 AND ICC_quantile > 0.5 AND
+max_session_shift < k x sigma_within. Anything else is
+"intermittent or outlier" (the boundary joins the weaker
+claim; the word "stable" is never printed on consistency
+alone).
 
 k is derived, never assumed (issues #35, #36). A Gaussianity
 test on the noise samples is mandatory: a KS test against a
@@ -40,12 +50,13 @@ scipy, no verdict). If it passes, k = 3 - and k = 3 is
 provisional under the issue #36 cost derivation (k* =
 k_gaussian + (1/2) x ln[((1 - pi) / pi) x (C_accept /
 C_reject)], approximately 4.2 under the temporary pi = 0.9
-and C_accept / C_reject = 100; k = 3 is an assumption result,
-not a rule, until C_accept / C_reject is measured in a
-separate issue). If the Gaussianity test fails, k comes from
-the empirical quantile of the standardized samples - never the
-round 3. A fixed k without a Gaussianity test is a bare
-constant wearing a lab coat.
+and C_accept / C_reject = 100 - declared a business commitment
+by README's Verification commitment section, issue #37; k = 3
+is an assumption result, not a rule, until the cost ratio is
+measured in a separate issue). If the Gaussianity test fails,
+k comes from the empirical quantile of the standardized
+samples - never the round 3. A fixed k without a Gaussianity
+test is a bare constant wearing a lab coat.
 
 Known simplifications, documented rather than hidden: the
 pairwise samples share runs (correlated draws, not independent
@@ -55,8 +66,11 @@ cross-backend diffs are printed and pooled into the
 distribution the Gaussianity test sees, while the noise
 measure itself is the max over same-backend run pairs (a
 backend gap is a configuration difference, not run noise);
-the across samples compare session MEANS by max-abs-diff, a
-scalar proxy for a tensor distance; and with few samples the
+the across samples and max_session_shift compare session
+MEANS, a scalar proxy for a tensor distance; the per-session
+p95 of a small session is that session's maximum (2 seeds =
+one pair, 3 seeds = the max of 3) - the quantile is a max in
+disguise until seeds grow; and with few samples the
 empirical quantile at 99.73% is the sample maximum - it
 lowers the false rejection rate below the target and raises
 the false acceptance risk. More sessions and seeds tighten
@@ -96,13 +110,16 @@ import sys
 # spread between session means, fewer than 2 seeds leaves no
 # within-session pair (and the floors imply at least 6 runs,
 # above the issue #35 under-power line of 5). ICC_VERIFIED is
-# the issue #36 named decision: above it the across-session
-# signal carries the variance and stability is verified.
+# the issue #37 named decision: both ICC_mean and ICC_quantile
+# must clear it, and max_session_shift must stay under
+# k x sigma_within, before the verdict says "stable". P95 is
+# the per-session quantile the ICC_quantile gate reads.
 ALPHA = 0.0027
 KS_SIGNIFICANCE = 0.05
 MIN_SESSIONS = 3
 MIN_SEEDS = 2
 ICC_VERIFIED = 0.5
+P95 = 0.95
 
 
 def _max_abs_diff(a, b):
@@ -177,10 +194,12 @@ def derive_k(samples):
     1 - alpha), never a chosen constant. Runs the mandatory
     Gaussianity test (KS test against a fitted normal,
     scipy.stats). k = 3 only when the test passes - provisional
-    under the issue #36 cost derivation - and the empirical
-    quantile of the standardized samples otherwise. Returns
-    (k, test_line); test_line documents the test and the
-    assumption next to the verdict.
+    under the issue #36 cost derivation, declared a business
+    commitment by README's Verification commitment section
+    (issue #37) - and the empirical quantile of the
+    standardized samples otherwise. Returns (k, test_line);
+    test_line documents the test and the assumption next to
+    the verdict.
     """
     import scipy.stats
 
@@ -190,10 +209,11 @@ def derive_k(samples):
         k = 3.0
         line = ("gaussianity: KS stat=%.4f, p=%.4f -> PASSED "
                 "(alpha=%.2f); k=3.0 (the 3-sigma convention - "
-                "provisional under the issue #36 cost "
-                "derivation: an assumption result, not a rule, "
-                "until C_accept/C_reject is measured; "
-                "assumption documented)"
+                "provisional under the issue #36 cost derivation, "
+                "declared a business commitment by README's "
+                "Verification commitment section, issue #37: an "
+                "assumption result, not a rule, until the cost "
+                "ratio is measured; assumption documented)"
                 % (stat, p, KS_SIGNIFICANCE))
     else:
         z = [(s - mean) / std for s in samples]
@@ -205,34 +225,57 @@ def derive_k(samples):
     return k, line
 
 
-def stability(within_samples, across_samples):
-    """The issue #36 decomposition: within-session consistency
-    vs across-session stability. Returns (sigma_within,
-    sigma_across, icc, status), or (None, None, None, reason)
-    when the variance cannot be decomposed and both claims
-    would be undefined. ICC = sigma_across^2 / (sigma_across^2
-    + sigma_within^2); ICC > ICC_VERIFIED = verified,
-    otherwise intermittent (the boundary joins the weaker
-    claim).
+def stability(within_samples, across_samples, session_p95s,
+              session_mean_scalars, k):
+    """The issue #36/#37 decomposition: within-session
+    consistency vs across-session stability, judged by three
+    gates (issue #37): ICC_mean = sigma_across^2 /
+    (sigma_across^2 + sigma_within^2), ICC_quantile =
+    sigma_p95_across^2 / (sigma_p95_across^2 + sigma_within^2),
+    and max_session_shift < k x sigma_within. The verdict is
+    "stable" only when all three hold; anything else is
+    "intermittent or outlier" (the boundary joins the weaker
+    claim). Returns (sigma_within, sigma_across, icc_mean,
+    icc_quantile, max_session_shift, status), or a tuple
+    starting with None and ending in the refusal reason when
+    the variance cannot be decomposed and both claims would
+    be undefined.
     """
     _, sigma_within = _sample_stats(within_samples)
     _, sigma_across = _sample_stats(across_samples)
-    if sigma_within == 0.0 and sigma_across == 0.0:
-        return (None, None, None,
+    _, sigma_p95_across = _sample_stats(session_p95s)
+    if (sigma_within == 0.0 and sigma_across == 0.0
+            and sigma_p95_across == 0.0):
+        return (None, None, None, None, None,
                 "no within- or across-session variance to "
                 "decompose - consistency and stability are both "
                 "undefined")
-    icc = sigma_across ** 2 / (sigma_across ** 2 + sigma_within ** 2)
-    status = "verified" if icc > ICC_VERIFIED else "intermittent"
-    return sigma_within, sigma_across, icc, status
+    if sigma_within == 0.0 and sigma_p95_across == 0.0:
+        return (None, None, None, None, None,
+                "no within-session variance and no per-session "
+                "p95 spread - ICC_quantile would be undefined")
+    icc_mean = sigma_across ** 2 / (sigma_across ** 2
+                                    + sigma_within ** 2)
+    icc_quantile = sigma_p95_across ** 2 / (
+        sigma_p95_across ** 2 + sigma_within ** 2)
+    overall_mean = sum(within_samples) / len(within_samples)
+    max_session_shift = max(abs(m - overall_mean)
+                            for m in session_mean_scalars)
+    if (icc_mean > ICC_VERIFIED and icc_quantile > ICC_VERIFIED
+            and max_session_shift < k * sigma_within):
+        status = "stable"
+    else:
+        status = "intermittent or outlier"
+    return (sigma_within, sigma_across, icc_mean, icc_quantile,
+            max_session_shift, status)
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="HiveMind vs HF parity, judged by a derived "
         "threshold (k x max(2 runs) for logits, k from the noise "
-        "distribution; prints the issue #36 stability "
-        "decomposition).")
+        "distribution; prints the issue #37 three-gate stability "
+        "verdict: ICC_mean, ICC_quantile, max_session_shift).")
     parser.add_argument("--hf", required=True,
                         help="HF model id or path: the reference side")
     parser.add_argument("--hive", required=True,
@@ -304,14 +347,21 @@ def main():
             run_samples.append(_max_abs_diff(flat_runs[i],
                                              flat_runs[j]))
 
-    # the issue #36 decomposition: within (same session) and
-    # across (session means)
-    within_samples = []
+    # the issue #36/#37 decomposition: within (same session),
+    # across (session means), per-session p95s, session shifts
+    session_within = []
     for runs in session_runs:
+        diffs = []
         for i in range(len(runs)):
             for j in range(i + 1, len(runs)):
-                within_samples.append(_max_abs_diff(runs[i],
-                                                    runs[j]))
+                diffs.append(_max_abs_diff(runs[i], runs[j]))
+        session_within.append(diffs)
+    within_samples = [d for diffs in session_within
+                      for d in diffs]
+    session_p95s = [_empirical_quantile(diffs, P95)
+                    for diffs in session_within]
+    session_mean_scalars = [sum(diffs) / len(diffs)
+                            for diffs in session_within]
     session_means = [torch.stack(runs).mean(dim=0)
                      for runs in session_runs]
     across_samples = []
@@ -348,17 +398,21 @@ def main():
               "to standardize", file=sys.stderr)
         return 6
 
-    sigma_within, sigma_across, icc, outcome = stability(
-        within_samples, across_samples)
-    if sigma_within is None:
-        print("judgment refused: %s" % outcome, file=sys.stderr)
-        return 6
-    stability_status = outcome
-    print("stability: sigma_within=%s, sigma_across=%s, ICC=%s, "
-          "status: %s" % (sigma_within, sigma_across, icc,
-                          stability_status))
-
+    # k first (issue #37): the max_session_shift gate reads it
     k, test_line = derive_k(pooled_samples)
+
+    stab = stability(within_samples, across_samples,
+                     session_p95s, session_mean_scalars, k)
+    if stab[0] is None:
+        print("judgment refused: %s" % stab[5], file=sys.stderr)
+        return 6
+    (sigma_within, sigma_across, icc_mean, icc_quantile,
+     max_session_shift, stability_status) = stab
+    print("stability: sigma_within=%s, sigma_across=%s, "
+          "ICC_mean=%s, ICC_quantile=%s, max_session_shift=%s, "
+          "status: %s" % (sigma_within, sigma_across, icc_mean,
+                          icc_quantile, max_session_shift,
+                          stability_status))
     print("# " + test_line)
     threshold = k * noise_measure
 
@@ -388,9 +442,11 @@ def main():
     diff = _max_abs_diff(main_logits, hive_logits)
     status = "PASS" if diff <= threshold else "FAIL"
     print("diff=%s, noise_measure=%s, sigma_within=%s, "
-          "sigma_across=%s, ICC=%s, k=%s, threshold=%s, status: %s"
-          % (diff, noise_measure, sigma_within, sigma_across, icc,
-             k, threshold, status))
+          "sigma_across=%s, ICC_mean=%s, ICC_quantile=%s, "
+          "max_session_shift=%s, k=%s, threshold=%s, status: %s"
+          % (diff, noise_measure, sigma_within, sigma_across,
+             icc_mean, icc_quantile, max_session_shift, k,
+             threshold, status))
     return 0 if status == "PASS" else 1
 
 

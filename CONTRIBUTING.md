@@ -274,6 +274,17 @@ k is derived, never assumed (issues #35, #36):
   their own derived thresholds when their definitions freeze
   into commitments; no commitment exists before then.
 
+## README edit rule
+
+README may be edited without a separate issue only when:
+1. The edit removes a text that contradicts a pre-registered law (e.g., sigma_model
+   when the law now says noise_measure per instrument), AND
+2. The edit is declared in the commit message as "drift correction: [law #N]", AND
+3. The edit does not introduce new claims, thresholds, or comparisons.
+
+Any other README edit requires an issue. "Drift correction" is not a license to
+rewrite — it is a license to remove contradictions.
+
 ## 🎓 Getting Help
 
 If you need help:

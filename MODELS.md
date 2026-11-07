@@ -1,9 +1,9 @@
-# MODELS.md - the model page (issues #35, #36)
+# MODELS.md - the model page (issues #35, #36, #37)
 
 One page. Every symbol on it is either measured or marked as a
 hypothesis; nothing here is a measurement claim. This page
 follows the unified threshold law (PRE_REGISTERED.md section
-10) and the derived-k rule (CONTRIBUTING.md, issues #35, #36).
+10) and the derived-k rule (CONTRIBUTING.md, issues #35, #36, #37).
 
 ## Token time
 
@@ -44,7 +44,7 @@ Declaration: h is a simplification. Generalizing h to other
 domains, other languages or other policies is an open
 hypothesis - neither claimed nor measured here.
 
-## k: derived from cost, not tradition (issue #36)
+## k: derived from cost, not tradition (issues #36, #37)
 
 The 3 in "k = 3" is a Gaussian quantile, and Gaussianity itself
 is only a hypothesis until the noise is tested. The cost
@@ -57,17 +57,22 @@ derivation moves the boundary to where the money is:
 - C_accept / C_reject = 100: the cost of accepting a false
   parity (a wrong engine ships as verified) over the cost of
   rejecting a true one (a correct engine is sent back).
-  Temporary - to be measured later; definition required
-  (RESEARCH_QUESTIONS.md).
+  Declared as a business commitment (README's
+  Verification commitment section, issue #37) - a
+  declaration, not a measurement; the definition and
+  measurement stay open (RESEARCH_QUESTIONS.md).
 - With the temporary numbers, k* is approximately 4.2.
 
-Named decision (issue #36): k = 3 stays provisional until
-C_accept / C_reject is measured in a separate issue.
+Named decision (issues #36, #37): k = 3 stays
+  provisional - a temporary assumption, explicitly weaker
+  than the declared commitment; the gap is documented, not
+  hidden - until C_accept / C_reject is measured in a
+  separate issue.
 
 Declaration: k = 3 is an assumption result, not a rule. The
 cost measurement issue is what would make it one.
 
-## Stability vs consistency (issue #36)
+## Stability vs consistency (issues #36, #37)
 
 Three seeds in one session are consistency, not stability: they
 show that the engine agrees with itself inside one session, and
@@ -75,14 +80,25 @@ nothing more.
 
 - 3 seeds = within-session consistency.
 - 5 sessions x 3 seeds = across-session stability.
-- ICC = sigma_across^2 / (sigma_across^2 + sigma_within^2),
-  with sigma_within the spread of the within-session pairwise
-  diffs and sigma_across the spread of the session-mean diffs.
-- ICC > 0.5 = verified. ICC < 0.5 = intermittent. The boundary
-  joins the weaker claim, and the word "stable" is never
-  printed on consistency alone.
+- ICC_mean = sigma_across^2 / (sigma_across^2 +
+  sigma_within^2), with sigma_within the spread of the
+  within-session pairwise diffs and sigma_across the spread
+  of the session-mean diffs.
+- ICC_quantile = sigma_p95_across^2 / (sigma_p95_across^2 +
+  sigma_within^2), with sigma_p95_across the spread of the
+  per-session p95s - the quantile test that a mean-shift
+  alone can hide.
+- max_session_shift: the largest session-mean shift from the
+  overall mean - one bad session must not impersonate
+  stability.
+- The verdict is "stable" only when ICC_mean > 0.5 AND
+  ICC_quantile > 0.5 AND max_session_shift < k x sigma_within
+  (issue #37); anything else is "intermittent or outlier".
+  The boundary joins the weaker claim, and the word "stable"
+  is never printed on consistency alone.
 - scripts/parity_check.py prints sigma_within, sigma_across,
-  ICC and the stability status next to every verdict.
+  ICC_mean, ICC_quantile, max_session_shift and the stability
+  status next to every verdict.
 
 ## Thresholds on this page
 
@@ -101,7 +117,8 @@ Gaussian. k is derived - k = Quantile(noise_dist, 1 - alpha),
 alpha = 0.27% target false rejection per test, with the
 mandatory Gaussianity test of issue #35 deciding between the
 normal quantile (k = 3) and the empirical one - and k = 3
-stays provisional under the issue #36 cost derivation: an
+stays provisional under the issue #36 cost derivation
+  (declared a commitment in README by issue #37): an
 assumption result, not a rule. No fixed k, no fixed 0.9, no
 exceptions.
 

@@ -176,19 +176,22 @@ noise runs - because logit noise is non-Gaussian (issue #36:
 one law, threshold = k x noise_measure(instrument), a measure
 per instrument). A mandatory Gaussianity test (scipy.stats KS
 test against a fitted normal) derives k: k = 3 when it
-passes - provisional under the issue #36 cost derivation
-(k* = k_gaussian + (1/2) x ln[((1 - pi) / pi) x
-(C_accept / C_reject)], approximately 4.2 under the temporary
-pi = 0.9 and C_accept / C_reject = 100; k = 3 is an
-assumption result, not a rule, until the cost issue measures
-the ratio) - and the empirical quantile otherwise. The session
-structure also decomposes within-session consistency from
-across-session stability: the tool prints sigma_within,
-sigma_across and ICC = sigma_across^2 / (sigma_across^2 +
-sigma_within^2), with ICC > 0.5 = verified and ICC < 0.5 =
-intermittent - the word "stable" is never claimed on
-consistency alone. Every number it prints comes out of the
-measurement. A debt is paid only by the protocol below.
+passes - provisional under the issue #36 cost derivation,
+declared a business commitment by the Verification
+commitment section below (issue #37: k* approximately 4.2
+under the temporary pi = 0.9 and C_accept / C_reject = 100,
+with k = 3 an assumption result, not a rule, explicitly
+weaker than the declared commitment) - and the empirical
+quantile otherwise. The session structure also decomposes
+within-session consistency from across-session stability:
+the tool prints sigma_within, sigma_across, ICC_mean,
+ICC_quantile and max_session_shift, and the verdict is
+"stable" only when ICC_mean > 0.5 AND ICC_quantile > 0.5 AND
+max_session_shift < k x sigma_within (issue #37); anything
+else is "intermittent or outlier" - the word "stable" is
+never claimed on consistency alone. Every number it prints
+comes out of the measurement. A debt is paid only by the
+protocol below.
 
 ### Paying a debt (issue #35)
 
@@ -205,9 +208,9 @@ before the campaign runs:
 - 3 seeds per claim: every claim runs under three seeds, and all
   three lines are published. Three seeds measure within-session
   consistency; across-session stability is a separate claim
-  (5 sessions x 3 seeds, ICC > 0.5 as printed by the tool,
-  MODELS.md issue #36) and is never claimed on consistency
-  alone.
+  (5 sessions x 3 seeds, the issue #37 stability gate as
+  printed by the tool, MODELS.md issues #36 and #37) and is
+  never claimed on consistency alone.
 - Aggregation rule: p95(per-prompt diff) < threshold, with the
   threshold from scripts/parity_check.py (k x max(2 runs), k
   derived).
@@ -215,8 +218,25 @@ before the campaign runs:
   before the campaign - never a decision named after seeing the
   numbers.
 - Output: diff p95, noise_measure, the stability line
-  (sigma_within, sigma_across, ICC), threshold, PASS/FAIL -
-  all published, none summarized away.
+  (sigma_within, sigma_across, ICC_mean, ICC_quantile,
+  max_session_shift), threshold, PASS/FAIL - all published,
+  none summarized away.
+
+## Verification commitment
+
+We publish parity debts (see table above) rather than claiming verification.
+This is a deliberate cost choice:
+
+- C_reject (cost of rejecting a working model): ~1 engineer-hour of investigation
+- C_accept (cost of shipping a broken model): loss of user trust, silent wrong outputs
+
+We declare C_accept/C_reject = 100. This is a **business commitment**, not a measurement.
+It yields k* ≈ 4.2 under π=0.9 (see MODELS.md). We currently use k=3 as a **temporary
+assumption**, explicitly weaker than our declared commitment. This gap is documented,
+not hidden.
+
+If we later lower C_accept/C_reject to 10, k* drops below 3.9 — and we will say so
+publicly, in this section, before any threshold change.
 
 ## 🗺️ Planned architectures (layout not implemented)
 
