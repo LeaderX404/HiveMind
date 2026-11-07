@@ -1,28 +1,60 @@
 """Tokens/sec prediction for a model on a hardware profile (#31 phase 1).
 
-The Phase 1 formula is deliberately simple and DECLARED, not
-invented:
+Phase 1 amendment: every predicted number is now a RANGE with a
+SOURCE, never a bare point estimate. A number that declares where
+it came from cannot masquerade as a measurement:
 
-    tps = (disk_gbs / model_size_gb) * OVERHEAD_FACTOR
+- a real measurement (recorded by record_actual_load after an
+  actual load) outranks every formula and is shown as a narrow
+  band around the measured value;
+- without a measurement, the disk-speed calculator returns a
+  wide range (0.5x - 1.0x of the raw streaming rate) and says so
+  in its source string.
 
-OVERHEAD_FACTOR = 0.7 comes from preliminary measurements: with a
-cold page cache, streaming the weights from the NVMe dominates the
-time to first token, and observed throughput landed at about 70%
-of the raw disk streaming rate. It is a placeholder constant -
-later phases replace it with a measured per-device calibration,
-never with a nicer-looking guess.
+OVERHEAD_FACTOR is an INTERNAL detail only: a single point
+constant from preliminary measurements. It must never appear in
+any UI output - ranges and sources are what the user sees. See
+MEASUREMENT_POLICY.md.
 """
-OVERHEAD_FACTOR = 0.7  # derived from preliminary measurements (see docstring)
+from typing import Optional, Tuple
+
+OVERHEAD_FACTOR = 0.7  # internal detail from preliminary measurements; never shown in output
 WORDS_50_TOKENS = 65  # 50 words of English text are roughly 65 tokens
 
+RANGE_LOW_FACTOR = 0.5   # declared lower bound of an estimate
+RANGE_HIGH_FACTOR = 1.0  # declared upper bound (raw disk streaming rate)
+MEASURED_BAND = 0.1      # declared: a measurement is a band, not a law
 
-def predict_tps(model_size_gb: float, disk_gbs: float) -> float:
-    """Predict tokens/sec: (disk_gbs / model_size_gb) * OVERHEAD_FACTOR."""
+SOURCE_ESTIMATED = "estimated from disk speed, not measured"
+SOURCE_MEASURED = "measured on this device"
+
+
+def predict_tps_range(model_size_gb: float, disk_gbs: float,
+                      measured_gbs: Optional[float] = None) -> Tuple[float, float, str]:
+    """Return (low, high, source) tokens/sec for a model.
+
+    A real measurement wins outright and is shown as a band
+    (roughly +/-10%): one load is one sample, not a law. Without
+    one, the disk-speed calculator produces a wide, honestly
+    labeled range. The source string travels with the numbers -
+    no number is returned without one.
+    """
     if model_size_gb <= 0:
         raise ValueError("model_size_gb must be positive")
+    if measured_gbs is not None and measured_gbs > 0:
+        return (
+            measured_gbs * (1.0 - MEASURED_BAND),
+            measured_gbs * (1.0 + MEASURED_BAND),
+            SOURCE_MEASURED,
+        )
     if disk_gbs <= 0:
         raise ValueError("disk_gbs must be positive")
-    return (disk_gbs / model_size_gb) * OVERHEAD_FACTOR
+    rate = disk_gbs / model_size_gb
+    return (
+        rate * RANGE_LOW_FACTOR,
+        rate * RANGE_HIGH_FACTOR,
+        SOURCE_ESTIMATED,
+    )
 
 
 def predict_oom_risk(model_size_gb: float, ram_gb: float) -> str:
