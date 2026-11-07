@@ -55,8 +55,11 @@ hold.
   (--calibrate-shard) survives only as a diagnostic: the
   fragmentation premium = (flat - replayed) / flat is
   measured and recorded, never estimated, and a premium
-  above 10% proves the flat ceiling unfaithful. The gate
-  consumes the replayed number exclusively. Calibration
+  above the derived threshold (k x sigma_noise, amendment
+  #26) proves the flat ceiling unfaithful. The gate
+  consumes the replayed number exclusively, and the capture
+  layer is judged before it measures (amendment #26).
+  Calibration
   controls are mandatory: a replay at 50% of the measured
   limit must survive and a replay at 150% must fail; if
   either misbehaves the calibration is invalid and no
@@ -100,7 +103,10 @@ Amendment record: issues #22 (two-gate structure), #23
 factor: the budget becomes a measured fact) and #25 (the
 judge is also on trial: trace-replay calibration with
 mandatory controls, and a margin that is an interval
-which refuses to judge when under-powered), all before
+which refuses to judge when under-powered) and #26 (the
+ruler of the ruler: the capture layer is judged before
+it measures, and the fragmentation threshold is derived
+from sigma_noise - the chosen 10% is dead), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -188,7 +194,31 @@ never a point (amendment #25):
 - A report that predates amendment #25 (no sigma interval
   on the line) is not auditable and is refused.
 
-## 7. Amendment rule
+## 7. Capture gate - the ruler is judged before it measures
+
+The tracing layer (`--record-trace`) is not trusted by default. Before any
+`--replay-calibrate`, the `--trace-capture-gate` must pass three checks:
+1. **Accounting closure:** sum(alloc) - sum(free) = 0 (or known live memory).
+   Any residual != 0 outside the known live set means a missed
+   allocation/free - the ruler is perforated.
+2. **Known leak injection:** a synthetic 100MB leak must be captured within +/-1%.
+3. **Deterministic replay:** the same trace replayed twice yields identical totals
+   (or within a declared noise margin).
+
+Calibration without the capture gate is **rejected** - the number is treated as
+if it was never measured.
+
+## 8. Fragmentation threshold - derived, never chosen
+
+The threshold for discarding flat calibration (`|flat - traced| > threshold`) is
+`k x sigma_noise`, where `sigma_noise` comes from `--variance-report` and `k = 3`
+(justified: 0.27% false-rejection x ~10 tests/year = 0.027/year, acceptable).
+The fixed 10% is **dead** - it was a type-four constant.
+
+If no variance report exists, the threshold **cannot be derived** and the tool
+exits with an explicit error. No default. No fallback.
+
+## 9. Amendment rule
 
 Any edit to this covenant invalidates all prior runs, requires a
 new seal, and an open issue announcing the invalidation - the
