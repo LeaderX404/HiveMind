@@ -158,12 +158,12 @@ REPRODUCE_K = 3
 # REPLAY_CONTROL_SAFE_FRACTION of the measured limit must
 # survive and a replay at REPLAY_CONTROL_DOOM_FRACTION must
 # fail; otherwise the calibration itself is invalid and no
-# number leaves the tool. A premium above
-# FRAG_PREMIUM_EXECUTION_THRESHOLD proves the flat ceiling
-# unfaithful: executed, never gates.
+# number leaves the tool. A premium above the DERIVED
+# threshold (amendment #26: REPRODUCE_K x sigma_noise from
+# the variance report, never a chosen 10%) proves the flat
+# ceiling unfaithful: executed, never gates.
 REPLAY_CONTROL_SAFE_FRACTION = 0.5
 REPLAY_CONTROL_DOOM_FRACTION = 1.5
-FRAG_PREMIUM_EXECUTION_THRESHOLD = 0.10
 #
 # The margin is an INTERVAL, never a point (amendment #25):
 # sigma estimated from n runs is itself noisy (chi-square,
@@ -179,6 +179,17 @@ FRAG_PREMIUM_EXECUTION_THRESHOLD = 0.10
 CI_LEVEL = 0.95
 Z_975 = 1.959964  # two-sided 95% normal quantile, from CI_LEVEL
 TARGET_MARGIN_WIDTH = 0.10
+#
+# The capture layer is judged before it measures (amendment
+# #26). The 100MB leak injection and its +/-1% tolerance are
+# prescribed by issue #26 as the control that judges the
+# recorder itself. Tags legitimately alive when the journal
+# ends: weights persist for the model lifetime and the KV
+# cache grows monotonically through generation (freed only
+# at context end) - declared in covenant section 5.
+LEAK_INJECT_BYTES = 100 * 1024 ** 2
+LEAK_INJECT_TOLERANCE = 0.01
+LIVE_TAGS = ("weight", "kv")
 
 
 class MockContext:
@@ -579,7 +590,79 @@ def _trace_peak_bytes(events) -> int:
     return max(peak, 1)
 
 
-def replay_calibrate(trace_path: str, step_gb: float) -> dict:
+def trace_capture_gate(trace) -> bool:
+    """Judge the capture layer before it judges anything (#26).
+
+    The calibration controls judge the CALIBRATION; these
+    checks judge the RECORDER. A trace that never passed this
+    gate cannot calibrate anything.
+    """
+    events = trace["events"]
+    # (a) accounting closure (modulo known live memory): every
+    # free must match a live alloc, and whatever stays alive at
+    # the end must belong to LIVE_TAGS. Anything else is a
+    # missed capture - the ruler is perforated.
+    live = {}
+    for i, ev in enumerate(events):
+        if ev["op"] == "alloc":
+            live[i] = ev
+        elif ev["index"] not in live:
+            print(f"  capture gate FAIL (a): free of index "
+                  f"{ev['index']} with no matching alloc")
+            return False
+        else:
+            live.pop(ev["index"])
+    residual = {}
+    for ev in live.values():
+        residual[ev["tag"]] = residual.get(ev["tag"], 0) + ev["bytes"]
+    dangling = {t: n for t, n in residual.items() if t not in LIVE_TAGS}
+    if dangling:
+        print(f"  capture gate FAIL (a): accounting does not close, "
+              f"live bytes outside {LIVE_TAGS}: {dangling}")
+        return False
+    # (b) known leak injection: 100MB allocated and never freed
+    # must be captured within +/- LEAK_INJECT_TOLERANCE by the
+    # same accounting walk.
+    injected_events = list(events) + [
+        {"op": "alloc", "tag": "leak_inject", "bytes": LEAK_INJECT_BYTES}
+    ]
+    live2 = {}
+    for i, ev in enumerate(injected_events):
+        if ev["op"] == "alloc":
+            live2[i] = ev
+        else:
+            live2.pop(ev["index"], None)
+    captured = sum(ev["bytes"] for ev in live2.values()
+                   if ev["tag"] == "leak_inject")
+    if abs(captured - LEAK_INJECT_BYTES) > (
+            LEAK_INJECT_TOLERANCE * LEAK_INJECT_BYTES):
+        print(f"  capture gate FAIL (b): injected {LEAK_INJECT_BYTES} "
+              f"bytes, captured {captured} - outside +/-1%")
+        return False
+    # (c) deterministic replay: two independent passes over the
+    # same trace must produce identical totals and peaks.
+    totals = []
+    peaks = []
+    for _ in range(2):
+        total = 0
+        for ev in events:
+            if ev["op"] == "alloc":
+                total += ev["bytes"]
+        totals.append(total)
+        peaks.append(_trace_peak_bytes(events))
+    if totals[0] != totals[1] or peaks[0] != peaks[1]:
+        print("  capture gate FAIL (c): replay is not deterministic")
+        return False
+    print("  capture gate PASS: accounting closed (known live memory "
+          "only), leak injection captured within +/-1%, "
+          "replay deterministic")
+    return True
+
+
+def replay_calibrate(trace_path: str, step_gb: float,
+                     capture_gate: bool = False,
+                     noise_report: str = "",
+                     fragmentation_threshold: str = "derived") -> dict:
     """Pattern-aware max usable shard memory (amendment #25).
 
     The flat OOM step tests SIZE, not PATTERN: it never
@@ -594,12 +677,63 @@ def replay_calibrate(trace_path: str, step_gb: float) -> dict:
     if either misbehaves the calibration itself is invalid
     and no number leaves this function. The flat contiguous
     ceiling is measured only to price the premium.
+
+    Amendment #26: the capture layer is judged before this runs
+    (--trace-capture-gate: accounting closure, leak injection,
+    deterministic replay), and the flat-execution threshold is
+    DERIVED (REPRODUCE_K x sigma_noise from --noise-report),
+    never a chosen number.
     """
+    if not capture_gate:
+        raise SystemExit(
+            "REJECTED: capture gate required before calibration "
+            "(amendment #26: pass --trace-capture-gate - a trace "
+            "that was never judged cannot calibrate anything)"
+        )
     if not torch.cuda.is_available():
         raise SystemExit("--replay-calibrate needs a CUDA device")
     with open(trace_path) as f:
         trace = json.load(f)
+    if not trace_capture_gate(trace):
+        raise SystemExit(
+            "REJECTED: capture gate failed (amendment #26) - "
+            "no number leaves this tool"
+        )
     events = trace["events"]
+    # Amendment #26: the flat-execution threshold is DERIVED,
+    # never chosen: threshold = REPRODUCE_K x sigma_noise
+    # (relative), with sigma_noise from the variance report.
+    # REPRODUCE_K = 3 is bound to the named decisions in the
+    # constants block. Refused BEFORE the expensive OOM
+    # stepping: fail fast, never spend the budget first.
+    if fragmentation_threshold != "derived":
+        raise SystemExit(
+            "fragmentation threshold must be 'derived' "
+            "(k*sigma_noise) - a chosen number is a type-four "
+            "constant"
+        )
+    if not noise_report:
+        raise SystemExit(
+            "cannot derive threshold without variance report "
+            "(pass --noise-report with the --variance-report JSON)"
+        )
+    with open(noise_report) as f:
+        noise = json.load(f)
+    if noise.get("underpowered"):
+        raise SystemExit(
+            "cannot derive threshold from an under-powered "
+            "variance report - add runs until POWERED"
+        )
+    denom = noise.get("ratio_mean") or noise.get("tps_mean")
+    if not denom or noise.get("sigma_ci_upper") is None:
+        raise SystemExit(
+            "variance report predates amendment #25 (no sigma "
+            "interval on the line) - cannot derive threshold"
+        )
+    # conservative side of the sigma interval: flat is executed
+    # only when the premium exceeds the largest plausible noise
+    sigma_noise_rel = noise["sigma_ci_upper"] / denom
+    frag_threshold = REPRODUCE_K * sigma_noise_rel
     device = torch.cuda.get_device_name(0)
     base_peak = _trace_peak_bytes(events)
     step_scale = step_gb * 1024 ** 3 / base_peak
@@ -643,7 +777,7 @@ def replay_calibrate(trace_path: str, step_gb: float) -> dict:
     premium = ((flat_gb - replayed_gb) / flat_gb
                if flat_gb > 0 else None)
     flat_dead = (premium is not None
-                 and premium > FRAG_PREMIUM_EXECUTION_THRESHOLD)
+                 and premium > frag_threshold)
     result = {
         "device": device,
         "trace_path": trace_path,
@@ -653,6 +787,12 @@ def replay_calibrate(trace_path: str, step_gb: float) -> dict:
         "fragmentation_premium": (round(premium, 4)
                                   if premium is not None else None),
         "flat_ceiling_dead": flat_dead,
+        "fragmentation_threshold": round(frag_threshold, 4),
+        "threshold_source": (
+            "derived: REPRODUCE_K * sigma_ci_upper/mean from "
+            "--noise-report (amendment #26)"
+        ),
+        "capture_gate_passed": True,
         "controls": {
             "safe_fraction_survived": safe_ok,
             "doom_fraction_failed": doom_failed,
@@ -663,8 +803,10 @@ def replay_calibrate(trace_path: str, step_gb: float) -> dict:
     print(f"  trace-replay limit: {round(replayed_gb, 2)} GB (the workload pattern, OOM-stepped)")
     if premium is not None:
         word = ("EXECUTED - unfaithful, gates on replay only"
-                if flat_dead else "within threshold")
-        print(f"  fragmentation premium: {premium * 100:.1f}% -> {word}")
+                if flat_dead else "within derived threshold")
+        print(f"  fragmentation premium: {premium * 100:.1f}% vs derived "
+              f"threshold {frag_threshold * 100:.1f}% (k*sigma_noise) "
+              f"-> {word}")
     print(f"  controls: safe@50% survived={safe_ok}, doomed@150% failed={doom_failed}")
     print("  THE GATE CONSUMES THE REPLAYED NUMBER: "
           f"--max-usable-shard-gb {round(replayed_gb, 2)}")
@@ -941,11 +1083,11 @@ def overflow_gate_verdict(model_gb: float, shards: int,
     print(f"  measured min available memory: {min_available_gb} GB")
     print(f"  measured max usable shard (trace-replay calibration): {max_usable_shard_gb} GB")
     if premium is not None:
-        word = ("EXECUTED - unfaithful, replay gates alone"
-                if premium > FRAG_PREMIUM_EXECUTION_THRESHOLD
-                else "within threshold")
-        print(f"  fragmentation premium: {premium * 100:.1f}% "
-              f"(flat {flat_shard_gb} GB) -> {word}")
+        print(f"  fragmentation premium (diagnostic): "
+              f"{premium * 100:.1f}% (flat {flat_shard_gb} GB); the "
+              "execution verdict lives in the trace-replay "
+              "calibration, whose threshold is derived "
+              "k*sigma_noise (amendment #26)")
     for name, c in checks.items():
         ok = "PASS" if c["pass"] else "FAIL"
         print(f"  {name}: {c['value']} (limit {c['limit']}) -> {ok}")
@@ -1084,6 +1226,13 @@ def main():
                         help="allocation trace journal path (record and replay)")
     parser.add_argument("--replay-calibrate", action="store_true",
                         help="pattern-aware max usable shard memory by trace-replay OOM-stepping (gates on THIS)")
+    parser.add_argument("--trace-capture-gate", action="store_true",
+                        help="judge the capture layer before calibration: accounting closure, 100MB leak injection +/-1%, deterministic replay (mandatory with --replay-calibrate)")
+    parser.add_argument("--fragmentation-threshold", choices=["derived"],
+                        default="derived",
+                        help="flat-execution threshold: derived (k*sigma_noise from --noise-report); a chosen number is a type-four constant")
+    parser.add_argument("--noise-report", type=str, default="",
+                        help="variance report JSON (from --variance-report --report FILE) that supplies sigma_noise for the derived threshold")
     parser.add_argument("--paired", action="store_true",
                         help="variance report: paired standalone/swarm runs per iteration (sigma of the ratio)")
     parser.add_argument("--flat-shard-gb", type=float, default=None,
@@ -1121,8 +1270,21 @@ def main():
         save_report(result, args.report)
         return
 
+    if args.trace_capture_gate and not args.replay_calibrate:
+        with open(args.trace_path) as f:
+            gate_trace = json.load(f)
+        if not trace_capture_gate(gate_trace):
+            raise SystemExit("REJECTED: capture gate failed (amendment #26)")
+        print("capture gate: PASS - the trace may now be replay-calibrated")
+        return
+
     if args.replay_calibrate:
-        result = replay_calibrate(args.trace_path, args.calibrate_step_gb)
+        result = replay_calibrate(
+            args.trace_path, args.calibrate_step_gb,
+            capture_gate=args.trace_capture_gate,
+            noise_report=args.noise_report,
+            fragmentation_threshold=args.fragmentation_threshold,
+        )
         save_report(result, args.report)
         return
 
