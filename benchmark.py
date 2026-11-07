@@ -189,7 +189,23 @@ TARGET_MARGIN_WIDTH = 0.10
 # at context end) - declared in covenant section 5.
 LEAK_INJECT_BYTES = 100 * 1024 ** 2
 LEAK_INJECT_TOLERANCE = 0.01
+# LIVE_TAGS is closed only for this amendment; a new tag joins
+# by an open issue that names the tag and why it is legitimately
+# alive at journal end (amendment #27 made the rule explicit -
+# MoE expert buffers retained between tokens will need it).
 LIVE_TAGS = ("weight", "kv")
+#
+# On-device injection (amendment #27): the device itself is
+# the witness. CUDA allocator counters are exact on the
+# allocator path (+/-1%); RSS carries the caching allocator's
+# noise, so the CPU tolerance is wider and declared (+/-5%),
+# prescribed by issue #27. The ten live probe sizes are the
+# known pattern the positive live control must capture, in
+# order.
+LIVE_INJECT_TOLERANCE_CUDA = 0.01
+LIVE_INJECT_TOLERANCE_CPU = 0.05
+LIVE_PROBE_SIZES = [4096, 8192, 16384, 32768, 65536, 131072,
+                    262144, 524288, 1048576, 2097152]
 
 
 class MockContext:
@@ -653,9 +669,150 @@ def trace_capture_gate(trace) -> bool:
     if totals[0] != totals[1] or peaks[0] != peaks[1]:
         print("  capture gate FAIL (c): replay is not deterministic")
         return False
+    # (d) on-device injection (amendment #27): a REAL allocation,
+    # witnessed by the device's own counter - the injection path
+    # is tried, never assumed. CUDA: the allocator's own stats
+    # delta within +/- LIVE_INJECT_TOLERANCE_CUDA. No CUDA:
+    # psutil RSS delta within +/- LIVE_INJECT_TOLERANCE_CPU -
+    # the caching allocator's noise is declared, not hidden. No
+    # reliable path available: refuse - a fake injection is
+    # worse than none.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        before = torch.cuda.memory_stats().get(
+            "allocated_bytes.all.current", 0)
+        probe = torch.empty(LEAK_INJECT_BYTES, dtype=torch.uint8,
+                            device="cuda")
+        probe[0] = 1  # touch the pages: the allocation is real
+        after = torch.cuda.memory_stats().get(
+            "allocated_bytes.all.current", 0)
+        delta = after - before
+        del probe
+        torch.cuda.empty_cache()
+        if abs(delta - LEAK_INJECT_BYTES) > (
+                LIVE_INJECT_TOLERANCE_CUDA * LEAK_INJECT_BYTES):
+            print(f"  capture gate FAIL (d): injected "
+                  f"{LEAK_INJECT_BYTES} bytes on CUDA, the device "
+                  f"witnessed {delta} - outside +/-1%")
+            return False
+    else:
+        try:
+            import psutil
+        except ImportError:
+            raise SystemExit(
+                "capture gate (d): no reliable injection path "
+                "(no CUDA device and psutil is not installed) - "
+                "refusing: a fake injection is worse than none"
+            )
+        proc = psutil.Process()
+        before = proc.memory_info().rss
+        probe = bytearray(LEAK_INJECT_BYTES)
+        for i in range(0, len(probe), 4096):
+            probe[i] = 1  # touch the pages so RSS actually grows
+        after = proc.memory_info().rss
+        delta = after - before
+        del probe
+        if abs(delta - LEAK_INJECT_BYTES) > (
+                LIVE_INJECT_TOLERANCE_CPU * LEAK_INJECT_BYTES):
+            print(f"  capture gate FAIL (d): injected "
+                  f"{LEAK_INJECT_BYTES} bytes on CPU, RSS "
+                  f"witnessed {delta} - outside +/-5%")
+            return False
     print("  capture gate PASS: accounting closed (known live memory "
           "only), leak injection captured within +/-1%, "
-          "replay deterministic")
+          "replay deterministic, on-device injection witnessed")
+    return True
+
+
+class _LiveRecorder:
+    """Real-time journal of torch.empty allocations (#27).
+
+    Patches, for the duration of the window only, the allocation
+    path that --replay-calibrate itself consumes (torch.empty),
+    and journals every alloc (bytes) plus the matching free when
+    the tensor dies. Allocations outside the window produce zero
+    records: the boundary IS the recorder's contract.
+    """
+
+    def __init__(self):
+        self.events = []
+        self._orig = None
+
+    def __enter__(self):
+        import weakref
+        self._orig = torch.empty
+        events = self.events
+        orig = self._orig
+
+        def journaled_empty(*args, **kwargs):
+            t = orig(*args, **kwargs)
+            nbytes = t.numel() * t.element_size()
+            events.append({"op": "alloc", "tag": "live",
+                           "bytes": nbytes})
+            weakref.finalize(t, events.append,
+                             {"op": "free", "index": len(events) - 1})
+            return t
+
+        torch.empty = journaled_empty
+        return self
+
+    def __exit__(self, *exc):
+        torch.empty = self._orig
+        return False
+
+
+def live_capture_gate() -> bool:
+    """Judge the recorder IN TIME, before any real trace (#27).
+
+    The static gate judges the journal AFTER the fact; this gate
+    judges the recorder WHILE it records - the same logic as the
+    calibration's 50%/150% controls, applied one layer down:
+    a positive live control (a known pattern MUST be captured,
+    in order, at the right sizes), a negative live control
+    (allocations outside the window MUST produce zero records -
+    a recorder without boundaries poisons the analysis), and a
+    live determinism control (the same live pattern, recorded
+    twice, must produce the same alloc sequence).
+    """
+    def live_pattern():
+        # 10 known sizes, allocated in order during the window;
+        # the journal dies with the list, inside the window
+        return [torch.empty(n, dtype=torch.uint8)
+                for n in LIVE_PROBE_SIZES]
+
+    rec1 = _LiveRecorder()
+    with rec1:
+        live_pattern()
+    allocs1 = [e["bytes"] for e in rec1.events if e["op"] == "alloc"]
+    if allocs1 != LIVE_PROBE_SIZES:
+        print("  live capture gate FAIL (positive): the recorder "
+              "missed or reordered the known pattern")
+        print(f"    expected: {LIVE_PROBE_SIZES}")
+        print(f"    captured: {allocs1}")
+        return False
+    # negative live control: outside the window, zero records
+    rec2 = _LiveRecorder()
+    stray = torch.empty(4096, dtype=torch.uint8)  # BEFORE the window
+    with rec2:
+        pass
+    del stray  # AFTER the window
+    if rec2.events:
+        print(f"  live capture gate FAIL (negative): {len(rec2.events)} "
+              "records captured outside the recording window - the "
+              "recorder has no boundaries")
+        return False
+    # live determinism: the same pattern, recorded twice
+    rec3 = _LiveRecorder()
+    with rec3:
+        live_pattern()
+    allocs3 = [e["bytes"] for e in rec3.events if e["op"] == "alloc"]
+    if allocs3 != allocs1:
+        print("  live capture gate FAIL (determinism): the same "
+              "live pattern produced different journals")
+        return False
+    print("  live capture gate PASS: positive live captured in "
+          "order, negative live captured nothing, live replay "
+          "deterministic")
     return True
 
 
@@ -1226,6 +1383,8 @@ def main():
                         help="allocation trace journal path (record and replay)")
     parser.add_argument("--replay-calibrate", action="store_true",
                         help="pattern-aware max usable shard memory by trace-replay OOM-stepping (gates on THIS)")
+    parser.add_argument("--live-capture-gate", action="store_true",
+                        help="judge the recorder IN TIME: positive live capture, negative live (zero records outside the window), live determinism (#27)")
     parser.add_argument("--trace-capture-gate", action="store_true",
                         help="judge the capture layer before calibration: accounting closure, 100MB leak injection +/-1%, deterministic replay (mandatory with --replay-calibrate)")
     parser.add_argument("--fragmentation-threshold", choices=["derived"],
@@ -1268,6 +1427,12 @@ def main():
             args.trace_path,
         )
         save_report(result, args.report)
+        return
+
+    if args.live_capture_gate:
+        if not live_capture_gate():
+            raise SystemExit("REJECTED: live capture gate failed (amendment #27)")
+        print("live capture gate: PASS - the recorder may now capture real traces")
         return
 
     if args.trace_capture_gate and not args.replay_calibrate:
