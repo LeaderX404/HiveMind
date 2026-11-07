@@ -44,10 +44,13 @@ hold.
   MEASURED available device memory (recorded per run via
   mem_get_info, never assumed from a spec sheet) but fits
   the aggregate.
-- Each shard must stay within MIN_AVAILABLE_GB x
-  SAFETY_FACTOR (0.85, OS/runtime overhead margin). The old
-  fixed 6 GB was a round guess wearing a uniform; it was
-  executed in amendment #23.
+- Each shard must stay within the MEASURED max usable shard
+  memory, obtained by OOM-stepping calibration
+  (benchmark.py --calibrate-shard) and recorded as a gate
+  fact. The fixed 6 GB was a round guess (executed in
+  amendment #23); the 0.85 safety factor was a guess about a
+  guess (executed in amendment #24). No factor survives: the
+  budget is a measurement, not a multiplication.
 - The gate passes only if generation completes with at least
   MIN_COMPLETION_TOKENS (64) tokens: the shortest length
   that can expose a leak of >= 1 MB/token. The slope must be
@@ -69,11 +72,16 @@ Constant law (amendment #23): every constant in benchmark.py
 is either (a) derived from a named decision, (b) measured and
 recorded per run, or (c) swept. No fourth kind. The 6 GB
 budget and the 16-token minimum were round guesses wearing
-uniforms; both were executed two hours after carving.
+uniforms; both were executed two hours after carving. The
+0.85 safety factor was a fourth kind wearing the uniform of
+a fix; it was executed in amendment #24, hours after it
+survived its own audit.
 
-Amendment record: issue #22 (two-gate structure) and issue
-#23 (constant audit), both before the first run; no
-measurements existed, so no runs were invalidated.
+Amendment record: issues #22 (two-gate structure), #23
+(constant audit) and #24 (execution of the 0.85 safety
+factor: the budget becomes a measured fact), all before the
+first run; no measurements existed, so no runs were
+invalidated.
 
 ## 3. Anchor calibration policy
 
@@ -114,7 +122,28 @@ way to move a withdrawal line after the data.
   are generated from measured RTT distributions and compute
   variance, and swept. Never claimed as captured.
 
-## 6. Amendment rule
+## 6. Reproduction tolerance (derived, never chosen)
+
+The acceptance margin for an independent replay is computed
+from measurements, never picked:
+
+- Noise floor: run the stage 10 times
+  (--variance-report 10); the floor is REPRODUCE_K (3,
+  3-sigma: beyond it a difference is systematic, not noise)
+  times the standard deviation of TPS.
+- Hardware spread: the difference of means across the
+  replayed configurations.
+- Margin = max(noise floor, hardware spread), computed and
+  printed by --reproduce-tolerance from recorded reports.
+- The margin applies to the swarm ADVANTAGE RATIO, not to
+  raw TPS: the ratio divides the same hardware noise by
+  itself and survives hardware differences better than
+  absolute numbers.
+- Independence is a seal chain on a repository the author
+  does not own (different account, documented hardware, its
+  own CI and its own timestamp), never a declaration.
+
+## 7. Amendment rule
 
 Any edit to this covenant invalidates all prior runs, requires a
 new seal, and an open issue announcing the invalidation - the
