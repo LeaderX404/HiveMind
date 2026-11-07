@@ -221,18 +221,34 @@ lives under "Planned architectures (layout not implemented)" with
 an open issue, and enters the ledger only after the code can load
 it and a measured parity number is published.
 
-## 📏 Unified Threshold Rule (issue #34)
+## 📏 Unified Threshold Rule (issues #34, #35)
 
 No acceptance threshold is a bare constant. Every threshold is
-k x noise_floor: the noise floor is measured on the same
-configuration the threshold will judge, and k carries a written
-justification (k = 3: 0.27% false rejection per test - the same
-named decision as REPRODUCE_K and the fragmentation threshold).
-Parity, the reproduction tolerance, the fragmentation threshold
-and any threshold added later (Model B epsilon, an L1 ladder
-delta) all live under this law. A threshold that cannot measure
-its noise floor refuses to judge; it does not fall back to a
-round number.
+k x a measured noise quantity, measured on the same
+configuration the threshold will judge, and k is derived,
+never assumed (issue #35):
+
+- k = Quantile(noise_dist, 1 - alpha), with a target false
+  rejection rate alpha = 0.27% per test.
+- A Gaussianity test on the noise samples is mandatory - a QQ
+  plot or a KS test against a fitted normal.
+  scripts/parity_check.py implements the KS test via
+  scipy.stats and refuses to judge without scipy: no test, no
+  verdict. If the test passes, k = 3 is legitimate and the
+  normality assumption is documented next to the verdict; if
+  it fails, k comes from the empirical distribution of the
+  standardized samples - never the round 3. A fixed k without
+  a Gaussianity test is a bare constant wearing a lab coat.
+- Parity lives under this rule today; the reproduction
+  tolerance and the fragmentation threshold keep their frozen
+  named decisions until their own tools adopt the derived-k
+  rule.
+- When Model B (kappa) and L1 (delta) are defined in
+  RESEARCH_QUESTIONS.md, they will be added to this law with
+  their own derived thresholds. No commitment exists before
+  definition.
+- A threshold that cannot measure its noise refuses to judge;
+  it does not fall back to a round number.
 
 ## 🎓 Getting Help
 

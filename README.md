@@ -162,16 +162,44 @@ line, judged by a threshold that is derived, not chosen:
 
 | Model | Parity debt | Target |
 |-------|-------------|--------|
-| Llama-3.1-8B | Owed — see #34 | max logit diff vs HF <= k x noise_floor (k = 3) |
-| Qwen2.5-7B | Owed — see #34 | max logit diff vs HF <= k x noise_floor (k = 3) |
+| Llama-3.1-8B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x sigma_model (k derived, #35) |
+| Qwen2.5-7B | Owed — see #34 | p95 per-prompt logit diff vs HF <= k x sigma_model (k derived, #35) |
 
 scripts/parity_check.py runs HiveMind and Hugging Face on the same
-prompt, measures the judge's own noise floor (HF twice on the same
-backend, plus a cross-backend run when a second backend exists),
-computes threshold = k x noise_floor, and prints
-"diff=X, noise_floor=Y, threshold=Z, status: PASS/FAIL". k = 3 and
-the formula live in the tool's docstring; every number it prints
-comes out of the measurement. A debt is paid only by that line.
+prompt and measures the judge's own noise before judging: HF runs
+--noise-runs times on the same backend (plus a cross-backend run
+when a second backend exists), the pairwise max-abs-diff samples
+give noise_floor and sigma_model, a mandatory Gaussianity test
+(scipy.stats KS test against a fitted normal) derives k, and the
+tool prints "diff=X, noise_floor=Y, sigma_model=S, k=K,
+threshold=Z, status: PASS/FAIL". k follows the issue #35 rule
+(k = Quantile(noise_dist, 1 - alpha), alpha = 0.27%): 3 only when
+the Gaussianity test passes, the empirical quantile otherwise.
+Every number it prints comes out of the measurement. A debt is
+paid only by the protocol below.
+
+### Paying a debt (issue #35)
+
+A debt leaves "Owed" only through the measured protocol, frozen
+before the campaign runs:
+
+- Pilot: 10 pilot claims; their per-claim p95 logit diffs give a
+  measured sigma.
+- N claims: N is sized from a target confidence-interval width on
+  that sigma - N = ceil((1.96 x sigma / width)^2), the standard
+  95% CI half-width for the mean of the per-claim p95 diffs. The
+  target width is named in the campaign issue before the campaign
+  runs.
+- 3 seeds per claim: every claim runs under three seeds, and all
+  three lines are published.
+- Aggregation rule: p95(per-prompt diff) < threshold, with the
+  threshold from scripts/parity_check.py (k x sigma_model, k
+  derived).
+- Pass condition: all claims pass, or 95% pass by a decision named
+  before the campaign - never a decision named after seeing the
+  numbers.
+- Output: diff p95, noise_floor, threshold, PASS/FAIL - all
+  published, none summarized away.
 
 ## 🗺️ Planned architectures (layout not implemented)
 

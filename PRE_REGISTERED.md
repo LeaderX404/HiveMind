@@ -129,7 +129,23 @@ run when one exists - the README parity section renamed from
 a status table to a debts ledger, and every present and
 future acceptance threshold - reproduction tolerance,
 fragmentation threshold, Model B epsilon, L1 delta -
-required to derive from a measured noise floor), all before
+required to derive from a measured noise floor) and #35
+(k derived, never assumed: k = Quantile(noise_dist,
+1 - alpha), alpha = 0.27%, with a mandatory Gaussianity test
+on the noise samples - a KS test against a fitted normal,
+scipy.stats, no scipy no verdict - deciding between k = 3
+with the assumption documented and the empirical quantile;
+the parity threshold basis moved from the max noise floor
+to sigma_model with the floor still measured and printed;
+the debts paid only by the measured protocol - 10 pilots for
+a sigma, N claims sized from a target CI width, 3 seeds per
+claim, p95(per-prompt diff) under the threshold, all claims
+pass or 95% by a decision named before the campaign; Model
+B and L1 removed as commitments and kept only as a forward
+reference to RESEARCH_QUESTIONS.md; and the model page
+MODELS.md - the T_token bound over activated bytes, h a
+measured function, h_threshold derived from T_cloud, p50
+and p95 separate), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -374,30 +390,46 @@ post-hoc goal-moving: a published miss is stronger evidence of
 honest measurement than a met target we cannot prove. The
 weaker claim is the stronger product.
 
-## 10. The unified threshold law (issue #34)
+## 10. The unified threshold law (issues #34, #35)
 
 No acceptance threshold in this covenant is a bare constant.
-Every threshold is k x noise_floor, measured on the
-configuration it will judge, with k justified in writing:
+Every threshold is k x a measured noise quantity, measured on
+the configuration it will judge, with k derived, never assumed:
 
-- Parity: threshold = k x noise_floor. The noise floor is
-  measured by scripts/parity_check.py before any verdict is
-  printed: HF run twice on the same backend
-  (noise_floor_same), plus a second HF backend when one
-  exists - CUDA vs CPU, or sdpa vs eager attention
-  (noise_floor_cross) - and noise_floor = max(both). k = 3
-  by the same 3-sigma logic as section 6 and section 8:
-  0.27% false rejection per test, an accepted price. The
-  tool prints diff, noise_floor, threshold and PASS/FAIL, and
-  with a zero noise floor it refuses to judge, exactly like
-  the under-powered tool of section 6.
+- Parity: threshold = k x sigma_model. The noise is measured
+  by scripts/parity_check.py before any verdict is printed:
+  HF runs --noise-runs times on the same backend, plus every
+  second HF backend that exists - CUDA vs CPU, sdpa vs eager
+  attention - and the pairwise max-abs-diff samples give
+  sigma_model (the threshold basis) and noise_floor (the raw
+  scale, still measured and printed).
+- k is derived, never assumed (issue #35):
+  k = Quantile(noise_dist, 1 - alpha), with a target false
+  rejection rate alpha = 0.27% per test. A Gaussianity test
+  on the noise samples is mandatory - a KS test against a
+  fitted normal (scipy.stats; no scipy, no verdict). If the
+  test passes, k = 3 is legitimate and the normality
+  assumption is documented next to the verdict; if it fails,
+  k comes from the empirical quantile of the standardized
+  samples. A fixed k without a Gaussianity test is a bare
+  constant wearing a lab coat.
+- The tool prints diff, noise_floor, sigma_model, k,
+  threshold and PASS/FAIL, and refuses to judge on a zero
+  noise floor, a zero sigma_model, missing scipy or an
+  under-powered sample count - exactly like the under-powered
+  tool of section 6.
 - The law is unified over every acceptance threshold in this
   covenant: the reproduction tolerance (section 6), the
   fragmentation threshold (section 8) and the parity
   threshold above are each k x a measured noise quantity.
-  Thresholds the campaign adds later - Model B epsilon, the
-  L1 ladder delta - are born under this law: derived from a
-  measured noise floor, never chosen as a round number.
+  The parity threshold derives k per the issue #35 rule
+  above; the reproduction tolerance and the fragmentation
+  threshold predate that rule and keep their frozen named
+  decisions under their own amendments until their tools
+  adopt it. When Model B (kappa) and L1 (delta) are defined
+  in RESEARCH_QUESTIONS.md, they will be added to this law
+  with their own derived thresholds. No commitment exists
+  before definition.
 - The rule is mirrored in CONTRIBUTING.md (Unified Threshold
   Rule) so the repository text and this covenant cannot
   drift apart.
