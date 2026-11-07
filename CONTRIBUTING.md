@@ -189,6 +189,20 @@ The marker alone is not enough. The guard enforces, on every push:
    exceed the count recorded in `serialization_exceptions.baseline`.
    Adding a new exception requires retiring an old one in the same PR.
 
+## ⚖️ Gate Law (process rule, issue #29)
+
+Every gate - runtime or CI - requires a named decision and a
+public issue. No reserve gates, no "just in case" gates, no gate
+without an issue: a gate added because "the ladder might be
+incomplete" is anxiety wearing a uniform, and anxiety has no
+stopping rule. The ladder produces ORDER, not a number, so it is
+judged by a structural linter (tests/unit/test_ladder_lint.py)
+that fails the build - never by a fifth gate, which would open
+an infinite regress. Gates are added by decision, never by
+anxiety: a new named decision ("we do not accept X") opens an
+issue and earns a gate; no new named decision, no new gate. The
+stopping rule is this law itself, not a constant.
+
 ## 🎓 Getting Help
 
 If you need help:
