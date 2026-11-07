@@ -60,8 +60,11 @@ Usage:
   python benchmark.py --stage 4 --apply-netem
   python benchmark.py --serve --port 50051 --shard-gb 0.2
   python benchmark.py --verdict single.json swarm.json
+  python benchmark.py --calibrate-shard --calibrate-step-gb 0.25
+  python benchmark.py --stage 1 --variance-report 10 --report noise.json
+  python benchmark.py --reproduce-tolerance noise.json their_noise.json
   python benchmark.py --gate overflow --model-gb 15 --shards 3 --per-shard-gb 6 \
-      --completed-tokens 64 --min-available-gb 7.5 --leak-slope-mb 0.4
+      --completed-tokens 64 --min-available-gb 7.5 --max-usable-shard-gb 6.5
 """
 import argparse
 import json
@@ -115,11 +118,6 @@ OVERFLOW_GATE = {
     # a swarm - no routing, no meaningful coordination tax.
     # More than 3 has diminishing coordination returns (stage 5).
     "min_devices": 3,
-    # (b) measured, never assumed: the per-shard budget is
-    # min-available-GB x SAFETY_FACTOR, measured per run via
-    # mem_get_info. The old fixed 6.0 GB was a round guess
-    # wearing a uniform (amendment 23).
-    "safety_factor": 0.85,
     # (a) decision-derived from the leak budget: the shortest
     # completion length that can expose a leak of >= 1 MB/token.
     # The slope must be probed on a separate 256-token run.
@@ -127,6 +125,20 @@ OVERFLOW_GATE = {
     "leak_probe_tokens": 256,
     "leak_budget_mb_per_token": 1.0,
 }
+
+# The per-shard budget is NOT a constant: it is a measured
+# fact (max usable shard memory via --calibrate-shard OOM
+# stepping), recorded per run. The fixed 6.0 GB was a guess;
+# the 0.85 safety factor was a guess about a guess. Both were
+# executed (amendments #23, #24). No factor survives.
+#
+# Reproduction tolerance: the replay acceptance margin is
+# derived from measured noise, never chosen. k = 3 is
+# decision-derived (3-sigma): beyond three standard
+# deviations a difference is systematic, not noise. The
+# margin applies to the swarm ADVANTAGE RATIO, not raw TPS:
+# the ratio divides the same hardware noise by itself.
+REPRODUCE_K = 3
 
 
 class MockContext:
@@ -407,20 +419,134 @@ def anchor_verdict(synthetic_tax: float, real_tax: float) -> dict:
     return {"relative_gap": rel_gap, "rows": rows, "uniform": uniform}
 
 
+def calibrate_shard(step_gb: float) -> dict:
+    """Measure the max usable shard memory by OOM stepping.
+
+    Allocations step up until the device raises OOM; the
+    largest size that SURVIVES is the per-shard budget - a
+    measured fact, not a constant. This executes the 0.85
+    safety factor (amendment #24): a factor about a
+    measurement is a guess wearing a uniform. Each chunk is
+    written to, so the pages are touched, not just reserved.
+    """
+    if not torch.cuda.is_available():
+        raise SystemExit("--calibrate-shard needs a CUDA device")
+    name = torch.cuda.get_device_name(0)
+    tensors = []
+    usable_gb = 0.0
+    step_b = int(step_gb * 1024 ** 3)
+    while True:
+        try:
+            t = torch.empty(step_b, dtype=torch.uint8, device="cuda")
+            t[: 64 * 1024 ** 2] = 1  # touch the pages: a real write
+            tensors.append(t)
+            usable_gb += step_gb
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                break
+            raise
+    del tensors
+    torch.cuda.empty_cache()
+    result = {
+        "device": name,
+        "step_gb": step_gb,
+        "max_usable_shard_gb": round(usable_gb, 2),
+    }
+    print(json.dumps(result, indent=2))
+    print("record this fact; pass it to --gate overflow (measured limit, no factor)")
+    return result
+
+
+def variance_report(stage: int, repeats: int, model_gb: float,
+                     shards: int, tokens: int, in_features: int) -> dict:
+    """Measure the noise floor of a stage by pure repetition.
+
+    The reproduction margin of an independent replay is
+    derived from THIS measurement (stdev x REPRODUCE_K),
+    never chosen. Beyond 3 sigma a difference is systematic,
+    not noise.
+    """
+    tps_values = []
+    for i in range(repeats):
+        if stage == 1:
+            metrics = run_isolated(
+                build_layers(model_gb, shards, in_features), tokens, in_features
+            )
+        else:
+            metrics = run_loopback(
+                build_layers(model_gb, shards, in_features), tokens, in_features
+            )
+        tps_values.append(metrics["tps"])
+        tps = metrics["tps"]
+        print(f"  run {i + 1}/{repeats}: {tps:.3f} tok/s")
+    mean = statistics.mean(tps_values)
+    stdev = statistics.stdev(tps_values) if len(tps_values) > 1 else 0.0
+    report = {
+        "stage": stage,
+        "model_gb": model_gb,
+        "shards": shards,
+        "tokens": tokens,
+        "repeats": repeats,
+        "tps_mean": mean,
+        "tps_stdev": stdev,
+        "noise_floor": REPRODUCE_K * stdev,
+    }
+    floor = report["noise_floor"]
+    print(f"\nnoise floor ({REPRODUCE_K}-sigma): {floor:.3f} tok/s")
+    return report
+
+
+def reproduce_tolerance(report_paths: List[str]) -> dict:
+    """Derive the acceptance margin for an independent replay.
+
+    Margin = max(k x noise floor, hardware spread) over the
+    measured reports - never a chosen number. It applies to
+    the swarm ADVANTAGE RATIO, not raw TPS: the ratio divides
+    the same hardware noise by itself and survives hardware
+    differences better than absolute numbers.
+    """
+    reports = []
+    for p in report_paths:
+        with open(p) as f:
+            reports.append(json.load(f))
+    floors = [REPRODUCE_K * r.get("tps_stdev", 0.0) for r in reports]
+    means = [r.get("tps_mean", 0.0) for r in reports]
+    spread = max(means) - min(means) if means else 0.0
+    margin = max(max(floors), spread) if floors else 0.0
+    print("=== REPRODUCTION TOLERANCE (derived, not chosen) ===")
+    for p, r in zip(report_paths, reports):
+        mean = r.get("tps_mean", 0.0)
+        stdev = r.get("tps_stdev", 0.0)
+        print(f"  {p}: mean {mean:.3f}, stdev {stdev:.3f}")
+    print(f"  noise floors (x{REPRODUCE_K}): {[round(x, 3) for x in floors]}")
+    print(f"  hardware spread: {spread:.3f}")
+    print(f"  => acceptance margin: {margin:.3f}")
+    print("  apply to the swarm ADVANTAGE RATIO, not to raw TPS")
+    return {
+        "reports": report_paths,
+        "noise_floors": floors,
+        "hardware_spread": spread,
+        "margin": margin,
+        "reproduce_k": REPRODUCE_K,
+    }
+
+
 def overflow_gate_verdict(model_gb: float, shards: int,
                           per_shard_gb: float, completed_tokens: int,
                           min_available_gb: float,
+                          max_usable_shard_gb: float,
                           leak_slope_mb=None) -> dict:
     """Evaluate the overflow gate against pre-registered rules.
 
     The gate tests the heart of the thesis: a model too big for
     any single device, held by the swarm, completing generation.
     It is evaluated from recorded run facts - the tool is the
-    judge, not the runner. Memory numbers are MEASURED per run
-    (mem_get_info), never assumed from a spec sheet: the 6 GB
-    and 8 GB constants were guesses and were executed.
+    judge, not the runner. Every memory number is MEASURED:
+    min available memory via mem_get_info, the per-shard budget
+    via OOM-stepping calibration (--calibrate-shard). The 6 GB
+    constant was a guess and the 0.85 factor was a guess about
+    a guess; both were executed (amendments #23, #24).
     """
-    shard_budget_gb = min_available_gb * OVERFLOW_GATE["safety_factor"]
     checks = {}
     checks["exceeds_single_device"] = {
         "value": model_gb,
@@ -435,8 +561,8 @@ def overflow_gate_verdict(model_gb: float, shards: int,
     }
     checks["per_shard_budget"] = {
         "value": per_shard_gb,
-        "limit": shard_budget_gb,
-        "pass": per_shard_gb <= shard_budget_gb,
+        "limit": max_usable_shard_gb,
+        "pass": per_shard_gb <= max_usable_shard_gb,
     }
     checks["min_devices"] = {
         "value": shards,
@@ -452,7 +578,7 @@ def overflow_gate_verdict(model_gb: float, shards: int,
     verdict = "OVERFLOW_GATE_PASS" if holds else "OVERFLOW_GATE_FAIL"
     print("\n=== OVERFLOW GATE (the heart of the thesis) ===")
     print(f"  measured min available memory: {min_available_gb} GB")
-    print(f"  derived shard budget: {shard_budget_gb:.2f} GB (safety factor {OVERFLOW_GATE['safety_factor']})")
+    print(f"  measured max usable shard (calibration): {max_usable_shard_gb} GB")
     for name, c in checks.items():
         ok = "PASS" if c["pass"] else "FAIL"
         print(f"  {name}: {c['value']} (limit {c['limit']}) -> {ok}")
@@ -463,7 +589,7 @@ def overflow_gate_verdict(model_gb: float, shards: int,
         "checks": checks,
         "holds": holds,
         "verdict": verdict,
-        "shard_budget_gb": shard_budget_gb,
+        "max_usable_shard_gb": max_usable_shard_gb,
         "leak_slope_mb_per_token": leak_slope_mb,
     }
 
@@ -577,6 +703,16 @@ def main():
                         help="smallest measured free memory across devices, GB (mem_get_info)")
     parser.add_argument("--leak-slope-mb", type=float, default=None,
                         help="measured memory slope of the 256-token leak probe, MB/token")
+    parser.add_argument("--calibrate-shard", action="store_true",
+                        help="measure max usable shard memory by OOM-stepping calibration")
+    parser.add_argument("--calibrate-step-gb", type=float, default=0.25,
+                        help="calibration resolution: max waste per shard equals one step")
+    parser.add_argument("--max-usable-shard-gb", type=float, default=None,
+                        help="measured per-shard limit from --calibrate-shard")
+    parser.add_argument("--variance-report", type=int, default=None, metavar="REPEATS",
+                        help="run the stage REPEATS times and measure the noise floor")
+    parser.add_argument("--reproduce-tolerance", nargs="+", metavar="REPORT_JSON",
+                        help="derive the replay acceptance margin from variance reports")
     parser.add_argument("--verdict", nargs=2,
                         metavar=("SINGLE_JSON", "SWARM_JSON"))
     args = parser.parse_args()
@@ -593,15 +729,39 @@ def main():
         )
         return
 
+    if args.calibrate_shard:
+        result = calibrate_shard(args.calibrate_step_gb)
+        save_report(result, args.report)
+        return
+
+    if args.reproduce_tolerance:
+        result = reproduce_tolerance(args.reproduce_tolerance)
+        save_report(result, args.report)
+        return
+
+    if args.variance_report is not None:
+        if args.stage not in (1, 2):
+            parser.error("--variance-report needs --stage 1 or --stage 2")
+        result = variance_report(
+            args.stage, args.variance_report, args.model_gb, args.shards,
+            args.tokens, args.in_features,
+        )
+        save_report(result, args.report)
+        return
+
     if args.gate == "overflow":
-        needed = (args.per_shard_gb, args.completed_tokens, args.min_available_gb)
+        needed = (
+            args.per_shard_gb, args.completed_tokens, args.min_available_gb,
+            args.max_usable_shard_gb,
+        )
         if any(v is None for v in needed):
             parser.error(
-                "--gate overflow needs --per-shard-gb, --completed-tokens and --min-available-gb"
+                "--gate overflow needs --per-shard-gb, --completed-tokens, "
+                "--min-available-gb and --max-usable-shard-gb"
             )
         overflow_gate_verdict(
             args.model_gb, args.shards, args.per_shard_gb, args.completed_tokens,
-            args.min_available_gb, args.leak_slope_mb
+            args.min_available_gb, args.max_usable_shard_gb, args.leak_slope_mb,
         )
         return
 
