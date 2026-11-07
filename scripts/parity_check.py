@@ -43,6 +43,12 @@ max_session_shift < k x sigma_within. Anything else is
 claim; the word "stable" is never printed on consistency
 alone).
 
+A stability claim additionally needs the 5-session protocol
+(issue #40, wave #38): with fewer sessions the tool prints
+"insufficient sessions for stability claim"
+in place of the max_session_shift number and as the stability
+status - the variance decomposes, the claim does not.
+
 k is derived, never assumed (issues #35, #36). A Gaussianity
 test on the noise samples is mandatory: a KS test against a
 normal distribution fitted to the samples (scipy.stats; no
@@ -120,6 +126,16 @@ MIN_SESSIONS = 3
 MIN_SEEDS = 2
 ICC_VERIFIED = 0.5
 P95 = 0.95
+#
+# Wave #38 (issue #40): a stability CLAIM needs the 5-session
+# protocol (issue #36). Three or four sessions can decompose
+# the variance but cannot support a stability claim: below
+# STABILITY_SESSIONS the tool prints
+# "insufficient sessions for stability claim"
+# instead of a max_session_shift number, and the stability
+# status says the same instead of "stable" or
+# "intermittent or outlier".
+STABILITY_SESSIONS = 5
 
 
 def _max_abs_diff(a, b):
@@ -235,7 +251,12 @@ def stability(within_samples, across_samples, session_p95s,
     and max_session_shift < k x sigma_within. The verdict is
     "stable" only when all three hold; anything else is
     "intermittent or outlier" (the boundary joins the weaker
-    claim). Returns (sigma_within, sigma_across, icc_mean,
+    claim) - but a stability claim additionally needs
+    STABILITY_SESSIONS or more sessions (issue #40): below
+    that the status reads
+    "insufficient sessions for stability claim"
+    and max_session_shift prints the same words instead of a
+    number. Returns (sigma_within, sigma_across, icc_mean,
     icc_quantile, max_session_shift, status), or a tuple
     starting with None and ending in the refusal reason when
     the variance cannot be decomposed and both claims would
@@ -261,7 +282,10 @@ def stability(within_samples, across_samples, session_p95s,
     overall_mean = sum(within_samples) / len(within_samples)
     max_session_shift = max(abs(m - overall_mean)
                             for m in session_mean_scalars)
-    if (icc_mean > ICC_VERIFIED and icc_quantile > ICC_VERIFIED
+    n_sessions = len(session_mean_scalars)
+    if n_sessions < STABILITY_SESSIONS:
+        status = "insufficient sessions for stability claim"
+    elif (icc_mean > ICC_VERIFIED and icc_quantile > ICC_VERIFIED
             and max_session_shift < k * sigma_within):
         status = "stable"
     else:
@@ -289,8 +313,8 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--sessions", type=int, default=5,
                         help="judge sessions (default 5, minimum %d; "
-                        "the across-session stability protocol)"
-                        % MIN_SESSIONS)
+                        "the stability claim needs %d sessions)"
+                        % (MIN_SESSIONS, STABILITY_SESSIONS))
     parser.add_argument("--seeds", type=int, default=3,
                         help="seeds per session (default 3, minimum "
                         "%d; the within-session consistency "
@@ -408,10 +432,14 @@ def main():
         return 6
     (sigma_within, sigma_across, icc_mean, icc_quantile,
      max_session_shift, stability_status) = stab
+    if args.sessions >= STABILITY_SESSIONS:
+        mss_display = max_session_shift
+    else:
+        mss_display = "insufficient sessions for stability claim"
     print("stability: sigma_within=%s, sigma_across=%s, "
           "ICC_mean=%s, ICC_quantile=%s, max_session_shift=%s, "
           "status: %s" % (sigma_within, sigma_across, icc_mean,
-                          icc_quantile, max_session_shift,
+                          icc_quantile, mss_display,
                           stability_status))
     print("# " + test_line)
     threshold = k * noise_measure
@@ -445,7 +473,7 @@ def main():
           "sigma_across=%s, ICC_mean=%s, ICC_quantile=%s, "
           "max_session_shift=%s, k=%s, threshold=%s, status: %s"
           % (diff, noise_measure, sigma_within, sigma_across,
-             icc_mean, icc_quantile, max_session_shift, k,
+             icc_mean, icc_quantile, mss_display, k,
              threshold, status))
     return 0 if status == "PASS" else 1
 
