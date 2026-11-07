@@ -832,18 +832,49 @@ def coverage_audit_gate() -> bool:
     """Match the journal against reality, not against a story (#29).
 
     The audit is not a control: controls judge the representation,
-    the audit compares what happened with what was journaled. The
-    instrument itself is tried first - expectation is not
-    evidence, so tracemalloc is tried even though PyTorch CPU
-    allocations are expected to bypass the Python allocator, and
-    the trial verdict is recorded either way. A judge that cannot
-    see a known allocation is blind, and an audit whose instrument
-    is unverified audits nothing. The recorder's uncovered path
-    is then MEASURED and printed as a number - a boundary with a
-    size, not a docstring claim.
+    the audit compares what happened with what was journaled.
+    Amendment #30 adds the judge of the judge: before any
+    ledger/reality comparison a TOOL CONTROL runs - a known
+    AUDIT_COVERED_BYTES allocation through torch.profiler. A
+    profiler that cannot see the known allocation is TOOL BLIND
+    and refuses to judge the ledger; only a TOOL VERIFIED
+    profiler may witness the journal. The tracemalloc trial is
+    kept for the record only - its verdict is logged, never
+    accepted. The recorder's uncovered path is then MEASURED
+    and printed as a number - a boundary with a size, not a
+    docstring claim.
     """
     print("coverage audit: the journal against reality")
-    # (1) instrument trial: tracemalloc first
+    # (1) tool control (#30): the judge of the judge. The audit
+    # instrument must see a KNOWN allocation before it is allowed
+    # to witness the journal. Blindness is a refusal, never an
+    # assumption of competence.
+    try:
+        from torch.profiler import profile, ProfilerActivity
+    except ImportError:
+        print("  TOOL BLIND - refusing to judge ledger: no "
+              "torch.profiler in this build")
+        return False
+    with profile(activities=[ProfilerActivity.CPU],
+                 profile_memory=True) as prof:
+        control_probe = torch.empty(AUDIT_COVERED_BYTES,
+                                    dtype=torch.uint8)
+        control_probe[0] = 1  # touch the pages: the allocation is real
+    del control_probe
+    if not [ev for ev in prof.events()
+            if (getattr(ev, "self_cpu_memory_usage", 0) or 0)
+            >= AUDIT_COVERED_BYTES]:
+        print("  TOOL BLIND - refusing to judge ledger: "
+              "torch.profiler cannot see a known "
+              f"{AUDIT_COVERED_BYTES}-byte CPU allocation")
+        return False
+    print("  TOOL VERIFIED - proceeding: torch.profiler sees the "
+          f"known {AUDIT_COVERED_BYTES}-byte allocation")
+    # (1b) tracemalloc trial, recorded for the audit trail only:
+    # expectation is not evidence, so the trial runs and its
+    # verdict is logged - but tracemalloc is never accepted as
+    # the audit instrument (the tool control decided, not a
+    # lucky trial)
     import tracemalloc
     tracemalloc.start()
     trial = torch.empty(AUDIT_UNCOVERED_BYTES, dtype=torch.uint8)
@@ -851,51 +882,22 @@ def coverage_audit_gate() -> bool:
     _, trial_peak = tracemalloc.get_traced_memory()
     del trial
     tracemalloc.stop()
-    instrument = None
     if trial_peak >= AUDIT_UNCOVERED_BYTES:
-        instrument = "tracemalloc"
-        print("  instrument trial: tracemalloc sees PyTorch CPU "
-              "allocations - recorded, tracemalloc accepted as "
-              "the audit instrument")
+        print("  tracemalloc trial: sees PyTorch CPU allocations "
+              "- recorded; NOT accepted as the instrument (the "
+              "tool control already decided)")
     else:
-        print("  instrument trial: tracemalloc is blind to PyTorch "
-              "CPU allocations (they bypass the Python allocator) "
-              "- recorded; trying torch.profiler")
-        try:
-            from torch.profiler import profile, ProfilerActivity
-        except ImportError:
-            print("  coverage audit FAIL (instrument): no "
-                  "torch.profiler in this build - no reliable "
-                  "audit path, refusing")
-            return False
-        with profile(activities=[ProfilerActivity.CPU],
-                     profile_memory=True) as prof:
-            probe = torch.empty(AUDIT_UNCOVERED_BYTES,
-                                dtype=torch.uint8)
-            probe[0] = 1
-        del probe
-        if not [ev for ev in prof.events()
-                if (getattr(ev, "self_cpu_memory_usage", 0) or 0)
-                >= AUDIT_UNCOVERED_BYTES]:
-            print("  coverage audit FAIL (instrument): "
-                  "torch.profiler cannot see a known "
-                  f"{AUDIT_UNCOVERED_BYTES}-byte CPU allocation")
-            print("  refusing: an audit whose instrument is "
-                  "unverified audits nothing - a fake audit is "
-                  "worse than none")
-            return False
-        instrument = "torch.profiler"
-        print("  instrument trial: torch.profiler sees the known "
-              "allocation - accepted as the audit instrument")
+        print("  tracemalloc trial: blind to PyTorch CPU "
+              "allocations (they bypass the Python allocator) - "
+              "recorded, as expected")
     # (2) the audit window: one known allocation on the covered
     # path (torch.empty - the path the recorder claims) and one
     # on an uncovered path (torch.zeros), journaled by the
     # recorder and witnessed by the accepted instrument at the
     # same time
     recorder = _LiveRecorder()
-    if instrument == "tracemalloc":
-        tracemalloc.start()
-        snap1 = tracemalloc.take_snapshot()
+    with profile(activities=[ProfilerActivity.CPU],
+                 profile_memory=True) as prof:
         with recorder:
             covered = torch.empty(AUDIT_COVERED_BYTES,
                                   dtype=torch.uint8)
@@ -903,27 +905,9 @@ def coverage_audit_gate() -> bool:
             uncovered = torch.zeros(AUDIT_UNCOVERED_BYTES,
                                     dtype=torch.uint8)
             uncovered[0] = 1
-        snap2 = tracemalloc.take_snapshot()
-        tracemalloc.stop()
-        # the window's known allocations are all >=
-        # AUDIT_UNCOVERED_BYTES; smaller diffs are interpreter
-        # noise, excluded by this declared filter
-        reality = [st.size for st in snap2.compare_to(snap1, "lineno")
-                   if st.size >= AUDIT_UNCOVERED_BYTES]
-    else:
-        from torch.profiler import profile, ProfilerActivity
-        with profile(activities=[ProfilerActivity.CPU],
-                     profile_memory=True) as prof:
-            with recorder:
-                covered = torch.empty(AUDIT_COVERED_BYTES,
-                                      dtype=torch.uint8)
-                covered[0] = 1
-                uncovered = torch.zeros(AUDIT_UNCOVERED_BYTES,
-                                        dtype=torch.uint8)
-                uncovered[0] = 1
-        reality = [ev.self_cpu_memory_usage for ev in prof.events()
-                   if (getattr(ev, "self_cpu_memory_usage", 0) or 0) > 0
-                   and ev.name.startswith("aten::")]
+    reality = [ev.self_cpu_memory_usage for ev in prof.events()
+               if (getattr(ev, "self_cpu_memory_usage", 0) or 0) > 0
+               and ev.name.startswith("aten::")]
     del covered, uncovered
     journal = [ev["bytes"] for ev in recorder.events
                if ev["op"] == "alloc"]
@@ -952,10 +936,11 @@ def coverage_audit_gate() -> bool:
               f"bytes to escape the journal, reality kept "
               f"{remaining}")
         return False
-    print("  coverage audit PASS: instrument tried first "
-          f"({instrument}), every journaled allocation "
-          "corroborated by reality, boundary measured: 1 "
-          f"allocation of {AUDIT_UNCOVERED_BYTES} bytes on an "
+    print("  coverage audit PASS: tool control first (tracemalloc "
+          "trial recorded, torch.profiler TOOL VERIFIED), every "
+          "journaled allocation corroborated by reality, boundary "
+          "measured: 1 allocation of "
+          f"{AUDIT_UNCOVERED_BYTES} bytes on an "
           "uncovered path (torch.zeros) escaped the journal")
     print("  trace contract: a single allocation on a path the "
           "real pattern exercises that the journal does not "
@@ -1531,7 +1516,7 @@ def main():
     parser.add_argument("--replay-calibrate", action="store_true",
                         help="pattern-aware max usable shard memory by trace-replay OOM-stepping (gates on THIS)")
     parser.add_argument("--coverage-audit", action="store_true",
-                        help="match the journal against reality before any trace: instrument tried first (tracemalloc expected blind to PyTorch CPU allocations, then torch.profiler must see a known one), journal corroborated entry by entry, uncovered path measured (mandatory with --record-trace) (#29)")
+                        help="match the journal against reality before any trace: tool control first (torch.profiler must see a known allocation or TOOL BLIND refuses; the tracemalloc trial is recorded, never accepted), journal corroborated entry by entry, uncovered path measured (mandatory with --record-trace) (#29)")
     parser.add_argument("--live-capture-gate", action="store_true",
                         help="judge the recorder IN TIME: positive live capture, negative live (zero records outside the window), live determinism (#27)")
     parser.add_argument("--trace-capture-gate", action="store_true",
