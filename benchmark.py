@@ -61,7 +61,9 @@ Usage:
   python benchmark.py --serve --port 50051 --shard-gb 0.2
   python benchmark.py --verdict single.json swarm.json
   python benchmark.py --calibrate-shard --calibrate-step-gb 0.25
-  python benchmark.py --stage 1 --variance-report 10 --report noise.json
+  python benchmark.py --record-trace --trace-path trace.json --model-gb 15 --shards 3 --tokens 64
+  python benchmark.py --replay-calibrate --trace-path trace.json --calibrate-step-gb 0.25
+  python benchmark.py --stage 1 --variance-report 10 --paired --report noise.json
   python benchmark.py --reproduce-tolerance noise.json their_noise.json
   python benchmark.py --gate overflow --model-gb 15 --shards 3 --per-shard-gb 6 \
       --completed-tokens 64 --min-available-gb 7.5 --max-usable-shard-gb 6.5
@@ -127,18 +129,56 @@ OVERFLOW_GATE = {
 }
 
 # The per-shard budget is NOT a constant: it is a measured
-# fact (max usable shard memory via --calibrate-shard OOM
-# stepping), recorded per run. The fixed 6.0 GB was a guess;
-# the 0.85 safety factor was a guess about a guess. Both were
-# executed (amendments #23, #24). No factor survives.
+# fact (max usable shard memory), recorded per run. The
+# fixed 6.0 GB was a guess; the 0.85 safety factor was a
+# guess about a guess. Both were executed (amendments
+# #23, #24). No factor survives.
 #
 # Reproduction tolerance: the replay acceptance margin is
-# derived from measured noise, never chosen. k = 3 is
-# decision-derived (3-sigma): beyond three standard
-# deviations a difference is systematic, not noise. The
-# margin applies to the swarm ADVANTAGE RATIO, not raw TPS:
-# the ratio divides the same hardware noise by itself.
+# derived from measured noise, never chosen. The margin
+# applies to the swarm ADVANTAGE RATIO, not raw TPS: the
+# ratio divides the same hardware noise by itself.
 REPRODUCE_K = 3
+# k = 3 is justified, not decorative (amendment #25):
+# 3 sigma = 0.27% false failure per test; at ~10
+# reproduction tests per year that is ~0.027 false
+# failures per year - the two named decisions (acceptable
+# false-failure frequency and test cadence) that derive it.
+#
+# The judge is also on trial (amendment #25): a calibration
+# that tests only SIZE is optimistic by the fragmentation
+# premium. The gate therefore consumes the TRACE-REPLAY
+# calibration (--replay-calibrate), which replays the
+# workload allocation pattern (persistent weights,
+# transient activations, monotone KV growth, out-of-order
+# jitter frees) and OOM-steps the SCALE FACTOR. The flat
+# contiguous ceiling (--calibrate-shard) survives only as a
+# diagnostic for the premium = (flat - replayed) / flat.
+# Controls are mandatory: a replay at
+# REPLAY_CONTROL_SAFE_FRACTION of the measured limit must
+# survive and a replay at REPLAY_CONTROL_DOOM_FRACTION must
+# fail; otherwise the calibration itself is invalid and no
+# number leaves the tool. A premium above
+# FRAG_PREMIUM_EXECUTION_THRESHOLD proves the flat ceiling
+# unfaithful: executed, never gates.
+REPLAY_CONTROL_SAFE_FRACTION = 0.5
+REPLAY_CONTROL_DOOM_FRACTION = 1.5
+FRAG_PREMIUM_EXECUTION_THRESHOLD = 0.10
+#
+# The margin is an INTERVAL, never a point (amendment #25):
+# sigma estimated from n runs is itself noisy (chi-square,
+# ~24% relative uncertainty at n=10). The report prints
+# [k x sigma_lower, k x sigma_upper] from a two-sided
+# CI_LEVEL interval on sigma (Wilson-Hilferty quantiles,
+# a declared approximation) and REFUSES judgment while the
+# interval is wider than TARGET_MARGIN_WIDTH. The target is
+# derived from SWARM_ADVANTAGE_FLOOR: to certify a 1.5x
+# advantage the margin relative width must stay below
+# 0.10. An under-powered tool rejects nothing - it
+# abstains, loudly and nonzero.
+CI_LEVEL = 0.95
+Z_975 = 1.959964  # two-sided 95% normal quantile, from CI_LEVEL
+TARGET_MARGIN_WIDTH = 0.10
 
 
 class MockContext:
@@ -453,81 +493,393 @@ def calibrate_shard(step_gb: float) -> dict:
         "max_usable_shard_gb": round(usable_gb, 2),
     }
     print(json.dumps(result, indent=2))
-    print("record this fact; pass it to --gate overflow (measured limit, no factor)")
+    print("diagnostic contiguous ceiling only (amendment #25): "
     return result
 
 
-def variance_report(stage: int, repeats: int, model_gb: float,
-                     shards: int, tokens: int, in_features: int) -> dict:
-    """Measure the noise floor of a stage by pure repetition.
+def record_alloc_trace(model_gb: float, shards: int, tokens: int,
+                       in_features: int, trace_path: str) -> dict:
+    """Journal the workload allocation pattern (amendment #25).
 
-    The reproduction margin of an independent replay is
-    derived from THIS measurement (stdev x REPRODUCE_K),
-    never chosen. Beyond 3 sigma a difference is systematic,
-    not noise.
+    The journal follows the shard rhythm, not one flat
+    block: persistent weights, a transient activation per
+    token, a KV cache that grows monotonically (the peak
+    arrives at the END, not the start), and jitter blocks
+    of varied sizes freed out of order - the fragmentation
+    holes a flat OOM step never sees. The format is plain
+    JSON so a trace captured from a REAL run can replace
+    it; until then the synthetic pattern is declared
+    modeling (covenant section 5), never claimed as
+    captured.
     """
+    per_shard_b = int(model_gb * 1024 ** 3 / max(1, shards))
+    act_b = max(1, in_features * 4)
+    events = []
+    for _ in range(shards):
+        events.append({"op": "alloc", "tag": "weight", "bytes": per_shard_b})
+    jitter_open = []
+    for n in range(tokens):
+        events.append({"op": "alloc", "tag": "activation",
+                        "bytes": act_b * (n % 3 + 1)})
+        events.append({"op": "free", "index": len(events) - 1})
+        events.append({"op": "alloc", "tag": "kv", "bytes": act_b})
+        jitter_b = max(1, (per_shard_b // 64) * ((n * 7) % 5 + 1) // 5)
+        events.append({"op": "alloc", "tag": "jitter", "bytes": jitter_b})
+        jitter_open.append(len(events) - 1)
+        if len(jitter_open) > 2 and n % 2 == 0:
+            events.append({"op": "free", "index": jitter_open.pop(0)})
+    for idx in jitter_open:
+        events.append({"op": "free", "index": idx})
+    trace = {
+        "model_gb": model_gb,
+        "shards": shards,
+        "tokens": tokens,
+        "in_features": in_features,
+        "events": events,
+    }
+    with open(trace_path, "w") as f:
+        json.dump(trace, f, indent=2)
+    tags = {}
+    for ev in events:
+        if ev["op"] == "alloc":
+            tags[ev["tag"]] = tags.get(ev["tag"], 0) + 1
+    print(f"allocation trace written to {trace_path}: "
+          f"{len(events)} events, allocs by tag {tags}")
+    print("replay it: --replay-calibrate --trace-path " + trace_path)
+    return {"trace_path": trace_path, "events": len(events),
+            "allocs_by_tag": tags}
+
+
+def _replay_trace(events, scale: float):
+    """Replay the journal at a scale factor; raise on OOM."""
+    live = {}
+    for i, ev in enumerate(events):
+        if ev["op"] == "alloc":
+            nbytes = max(1, int(ev["bytes"] * scale))
+            t = torch.empty(nbytes, dtype=torch.uint8, device="cuda")
+            t[: min(nbytes, 64 * 1024 ** 2)] = 1  # touch the pages
+            live[i] = t
+        else:
+            live.pop(ev["index"], None)
+    live.clear()
+    torch.cuda.empty_cache()
+
+
+def _trace_peak_bytes(events) -> int:
+    """Base peak footprint of the unscaled journal."""
+    total = 0
+    peak = 0
+    for ev in events:
+        if ev["op"] == "alloc":
+            total += ev["bytes"]
+            peak = max(peak, total)
+        else:
+            total -= events[ev["index"]]["bytes"]
+    return max(peak, 1)
+
+
+def replay_calibrate(trace_path: str, step_gb: float) -> dict:
+    """Pattern-aware max usable shard memory (amendment #25).
+
+    The flat OOM step tests SIZE, not PATTERN: it never
+    sees transient activations, monotone KV growth, or the
+    holes left by out-of-order frees. This calibration
+    replays the workload journal with OOM-stepping on the
+    SCALE FACTOR: the largest scale whose replay survives,
+    times the base peak, is the limit the gate consumes.
+    Controls are mandatory: a replay at
+    REPLAY_CONTROL_SAFE_FRACTION of the limit must survive
+    and a replay at REPLAY_CONTROL_DOOM_FRACTION must fail;
+    if either misbehaves the calibration itself is invalid
+    and no number leaves this function. The flat contiguous
+    ceiling is measured only to price the premium.
+    """
+    if not torch.cuda.is_available():
+        raise SystemExit("--replay-calibrate needs a CUDA device")
+    with open(trace_path) as f:
+        trace = json.load(f)
+    events = trace["events"]
+    device = torch.cuda.get_device_name(0)
+    base_peak = _trace_peak_bytes(events)
+    step_scale = step_gb * 1024 ** 3 / base_peak
+    scale = step_scale
+    surviving = 0.0
+    while True:
+        try:
+            _replay_trace(events, scale)
+            surviving = scale
+            scale += step_scale
+        except RuntimeError as exc:
+            if "out of memory" in str(exc).lower():
+                torch.cuda.empty_cache()
+                break
+            raise
+    if surviving <= 0.0:
+        raise SystemExit("replay calibration: not even one step survives")
+    # negative control: half the measured limit MUST survive
+    try:
+        _replay_trace(events, surviving * REPLAY_CONTROL_SAFE_FRACTION)
+        safe_ok = True
+    except RuntimeError:
+        torch.cuda.empty_cache()
+        safe_ok = False
+    # positive control: 150% of the measured limit MUST fail
+    try:
+        _replay_trace(events, surviving * REPLAY_CONTROL_DOOM_FRACTION)
+        doom_failed = False
+    except RuntimeError:
+        torch.cuda.empty_cache()
+        doom_failed = True
+    if not safe_ok or not doom_failed:
+        raise SystemExit(
+            "replay calibration INVALID: controls failed "
+            f"(safe survived: {safe_ok}, doomed failed: {doom_failed}); "
+            "the tool is broken - no number leaves this function"
+        )
+    replayed_gb = surviving * base_peak / 1024 ** 3
+    flat = calibrate_shard(step_gb)
+    flat_gb = flat["max_usable_shard_gb"]
+    premium = ((flat_gb - replayed_gb) / flat_gb
+               if flat_gb > 0 else None)
+    flat_dead = (premium is not None
+                 and premium > FRAG_PREMIUM_EXECUTION_THRESHOLD)
+    result = {
+        "device": device,
+        "trace_path": trace_path,
+        "step_gb": step_gb,
+        "max_usable_shard_gb": round(replayed_gb, 2),
+        "flat_ceiling_gb": flat_gb,
+        "fragmentation_premium": (round(premium, 4)
+                                  if premium is not None else None),
+        "flat_ceiling_dead": flat_dead,
+        "controls": {
+            "safe_fraction_survived": safe_ok,
+            "doom_fraction_failed": doom_failed,
+        },
+    }
+    print("\n=== CALIBRATION REPORT (trace-replay, amendment #25) ===")
+    print(f"  flat contiguous ceiling: {flat_gb} GB (diagnostic, never gates)")
+    print(f"  trace-replay limit: {round(replayed_gb, 2)} GB (the workload pattern, OOM-stepped)")
+    if premium is not None:
+        word = ("EXECUTED - unfaithful, gates on replay only"
+                if flat_dead else "within threshold")
+        print(f"  fragmentation premium: {premium * 100:.1f}% -> {word}")
+    print(f"  controls: safe@50% survived={safe_ok}, doomed@150% failed={doom_failed}")
+    print("  THE GATE CONSUMES THE REPLAYED NUMBER: "
+          f"--max-usable-shard-gb {round(replayed_gb, 2)}")
+    print(json.dumps(result, indent=2))
+    return result
+
+
+def sigma_interval(stdev: float, n: int):
+    """Two-sided CI_LEVEL interval on sigma (chi-square).
+
+    Sigma estimated from n runs is itself noisy: at n=10
+    the relative uncertainty is ~24% (chi-square, df=9).
+    Quantiles use the Wilson-Hilferty approximation - a
+    DECLARED approximation, printed as such so nobody
+    mistakes it for exact.
+    """
+    df = n - 1
+    if df < 1 or stdev <= 0:
+        return stdev, stdev
+    c = 2.0 / (9.0 * df)
+    chi_lo = df * (1 - c - Z_975 * c ** 0.5) ** 3
+    chi_hi = df * (1 - c + Z_975 * c ** 0.5) ** 3
+    lo = stdev * (df / chi_hi) ** 0.5
+    hi = stdev * (df / chi_lo) ** 0.5
+    return lo, hi
+
+
+def runs_required(stdev: float, mean: float) -> Optional[int]:
+    """Smallest n whose margin interval beats the target.
+
+    n is derived from the decision (the detection width),
+    never from a round number: with the measured stdev as
+    a plug-in, the chi-square spread of the sigma estimate
+    shrinks until k x sigma fits inside TARGET_MARGIN_WIDTH
+    of the mean.
+    """
+    if mean <= 0 or stdev <= 0:
+        return None
+    for n in range(2, 10000):
+        lo, hi = sigma_interval(stdev, n)
+        if REPRODUCE_K * (hi - lo) / mean < TARGET_MARGIN_WIDTH:
+            return n
+    return None
+def variance_report(stage: int, repeats: int, model_gb: float,
+                    shards: int, tokens: int, in_features: int,
+                    paired: bool = False) -> dict:
+    """Measure the noise floor AND its own uncertainty (#25).
+
+    The margin is an interval, never a point: sigma from n
+    runs carries chi-square uncertainty, so the report
+    prints [k x sigma_lower, k x sigma_upper] and REFUSES
+    to judge while the interval is wider than the detection
+    target. Paired mode runs standalone and swarm in the
+    same iteration and reports sigma of the paired RATIO:
+    the shared hardware noise cancels and the required n
+    shrinks with it.
+    """
+    if repeats < 2:
+        raise SystemExit("variance report needs >= 2 repeats (chi-square needs df >= 1)")
     tps_values = []
+    ratio_values = []
     for i in range(repeats):
         if stage == 1:
             metrics = run_isolated(
                 build_layers(model_gb, shards, in_features), tokens, in_features
             )
+            if paired:
+                single = run_isolated(
+                    build_layers(model_gb, 1, in_features), tokens, in_features
+                )
         else:
             metrics = run_loopback(
                 build_layers(model_gb, shards, in_features), tokens, in_features
             )
-        tps_values.append(metrics["tps"])
+            if paired:
+                single = run_loopback(
+                    build_layers(model_gb, 1, in_features), tokens, in_features
+                )
         tps = metrics["tps"]
-        print(f"  run {i + 1}/{repeats}: {tps:.3f} tok/s")
+        tps_values.append(tps)
+        line = f"  run {i + 1}/{repeats}: {tps:.3f} tok/s"
+        if paired:
+            ratio = tps / single["tps"] if single["tps"] > 0 else 0.0
+            ratio_values.append(ratio)
+            line += f"  paired ratio {ratio:.3f}"
+        print(line)
     mean = statistics.mean(tps_values)
-    stdev = statistics.stdev(tps_values) if len(tps_values) > 1 else 0.0
+    stdev = statistics.stdev(tps_values)
+    n = repeats
+    df = n - 1
+    sigma_lo, sigma_hi = sigma_interval(stdev, n)
+    if paired:
+        ratio_mean = statistics.mean(ratio_values)
+        ratio_stdev = statistics.stdev(ratio_values)
+        rs_lo, rs_hi = sigma_interval(ratio_stdev, n)
+        denom = ratio_mean
+        s_use, use_lo, use_hi = ratio_stdev, rs_lo, rs_hi
+    else:
+        ratio_mean = ratio_stdev = None
+        denom = mean
+        s_use, use_lo, use_hi = stdev, sigma_lo, sigma_hi
+    margin_lower = REPRODUCE_K * use_lo
+    margin_upper = REPRODUCE_K * use_hi
+    rel_width = ((margin_upper - margin_lower) / denom
+                 if denom > 0 else float("inf"))
+    n_req = runs_required(s_use, denom)
+    n_req_unpaired = runs_required(stdev, mean) if paired else n_req
+    underpowered = rel_width >= TARGET_MARGIN_WIDTH
+    status = (f"UNDER-POWERED at n={n} - add runs until width < target_width"
+              if underpowered else "POWERED - the interval is inside the target")
+    unit = "ratio" if paired else "tok/s"
+    print("\n=== VARIANCE REPORT (the ruler is also measured) ===")
+    print(f"  sigma = {s_use:.4f} {unit}  (95% CI: [{use_lo:.4f}, {use_hi:.4f}],"
+          f" n={n}, df={df}, Wilson-Hilferty)")
+    print(f"  margin_lower = k*sigma_lower = {margin_lower:.4f}")
+    print(f"  margin_upper = k*sigma_upper = {margin_upper:.4f}")
+    print(f"  k = {REPRODUCE_K}  (justified: 0.27% false-failure x ~10 tests/year = 0.027/year)")
+    if paired:
+        print(f"  paired_mode = on  (sigma_ratio = {ratio_stdev:.4f},"
+              f" n_required {n_req_unpaired} unpaired -> {n_req} paired)")
+    else:
+        print("  paired_mode = off  (pair standalone/swarm per iteration to shrink n)")
+    print(f"  target_width = {TARGET_MARGIN_WIDTH}  (relative, derived from thesis floor {SWARM_ADVANTAGE_FLOOR}x)")
+    print(f"  relative interval width: {rel_width:.3f}")
+    print(f"  runs required (plug-in): {n_req}")
+    print(f"  status: {status}")
     report = {
         "stage": stage,
         "model_gb": model_gb,
         "shards": shards,
         "tokens": tokens,
         "repeats": repeats,
+        "paired": paired,
         "tps_mean": mean,
         "tps_stdev": stdev,
         "noise_floor": REPRODUCE_K * stdev,
+        "sigma_ci_lower": use_lo,
+        "sigma_ci_upper": use_hi,
+        "margin_lower": margin_lower,
+        "margin_upper": margin_upper,
+        "relative_width": rel_width,
+        "n_required": n_req,
+        "target_width": TARGET_MARGIN_WIDTH,
+        "reproduce_k": REPRODUCE_K,
+        "underpowered": underpowered,
+        "status": status,
+        "amendment": 25,
     }
-    floor = report["noise_floor"]
-    print(f"\nnoise floor ({REPRODUCE_K}-sigma): {floor:.3f} tok/s")
+    if paired:
+        report["ratio_mean"] = ratio_mean
+        report["ratio_stdev"] = ratio_stdev
     return report
 
 
 def reproduce_tolerance(report_paths: List[str]) -> dict:
-    """Derive the acceptance margin for an independent replay.
+    """Derive the replay acceptance margin - or refuse to.
 
-    Margin = max(k x noise floor, hardware spread) over the
-    measured reports - never a chosen number. It applies to
-    the swarm ADVANTAGE RATIO, not raw TPS: the ratio divides
-    the same hardware noise by itself and survives hardware
-    differences better than absolute numbers.
+    The margin is an interval [k x sigma_lower, k x
+    sigma_upper] over the measured reports, never a chosen
+    number, and it applies to the swarm ADVANTAGE RATIO,
+    not raw TPS. A report without a sigma interval predates
+    amendment #25: not auditable, refused. A tool whose
+    interval is wider than the target is UNDER-POWERED: it
+    does not judge - it abstains, loudly and nonzero.
     """
     reports = []
     for p in report_paths:
         with open(p) as f:
             reports.append(json.load(f))
-    floors = [REPRODUCE_K * r.get("tps_stdev", 0.0) for r in reports]
+    missing = [p for p, r in zip(report_paths, reports)
+               if "sigma_ci_lower" not in r]
+    if missing:
+        raise SystemExit(
+            "JUDGMENT REFUSED: report(s) " + ", ".join(missing) +
+            " predate amendment #25 (no sigma interval on the line);"
+            " regenerate them"
+        )
+    under = [p for p, r in zip(report_paths, reports) if r.get("underpowered")]
+    if under:
+        raise SystemExit(
+            "JUDGMENT REFUSED: the tool is under-powered (margin interval" +
+            " wider than target); add runs: " + ", ".join(under)
+        )
+    paired_flags = {bool(r.get("paired")) for r in reports}
+    if len(paired_flags) > 1:
+        raise SystemExit(
+            "JUDGMENT REFUSED: mixed paired/unpaired reports - units differ"
+        )
+    floors = []
+    for r in reports:
+        s = r.get("ratio_stdev") if r.get("paired") else r.get("tps_stdev", 0.0)
+        floors.append(REPRODUCE_K * s)
     means = [r.get("tps_mean", 0.0) for r in reports]
     spread = max(means) - min(means) if means else 0.0
     margin = max(max(floors), spread) if floors else 0.0
+    lo = max(REPRODUCE_K * r["sigma_ci_lower"] for r in reports)
+    hi = max(REPRODUCE_K * r["sigma_ci_upper"] for r in reports)
     print("=== REPRODUCTION TOLERANCE (derived, not chosen) ===")
     for p, r in zip(report_paths, reports):
-        mean = r.get("tps_mean", 0.0)
-        stdev = r.get("tps_stdev", 0.0)
-        print(f"  {p}: mean {mean:.3f}, stdev {stdev:.3f}")
+        s = r.get("ratio_stdev") if r.get("paired") else r.get("tps_stdev", 0.0)
+        print(f"  {p}: sigma {s:.4f} "
+              f"(95% CI: [{r['sigma_ci_lower']:.4f}, {r['sigma_ci_upper']:.4f}],"
+              f" n={r.get('repeats')})")
     print(f"  noise floors (x{REPRODUCE_K}): {[round(x, 3) for x in floors]}")
     print(f"  hardware spread: {spread:.3f}")
-    print(f"  => acceptance margin: {margin:.3f}")
+    print(f"  => acceptance margin: {margin:.3f}  (interval: [{lo:.3f}, {hi:.3f}])")
     print("  apply to the swarm ADVANTAGE RATIO, not to raw TPS")
+    print("  status: POWERED - judgment is available")
     return {
         "reports": report_paths,
         "noise_floors": floors,
         "hardware_spread": spread,
         "margin": margin,
+        "margin_interval": [lo, hi],
         "reproduce_k": REPRODUCE_K,
+        "judgment": "AVAILABLE",
     }
 
 
@@ -535,7 +887,7 @@ def overflow_gate_verdict(model_gb: float, shards: int,
                           per_shard_gb: float, completed_tokens: int,
                           min_available_gb: float,
                           max_usable_shard_gb: float,
-                          leak_slope_mb=None) -> dict:
+                          leak_slope_mb=None, flat_shard_gb=None) -> dict:
     """Evaluate the overflow gate against pre-registered rules.
 
     The gate tests the heart of the thesis: a model too big for
@@ -543,9 +895,12 @@ def overflow_gate_verdict(model_gb: float, shards: int,
     It is evaluated from recorded run facts - the tool is the
     judge, not the runner. Every memory number is MEASURED:
     min available memory via mem_get_info, the per-shard budget
-    via OOM-stepping calibration (--calibrate-shard). The 6 GB
+    via TRACE-REPLAY calibration (--replay-calibrate; the flat
+    --calibrate-shard ceiling is a diagnostic for the
+    fragmentation premium, never a gate input). The 6 GB
     constant was a guess and the 0.85 factor was a guess about
-    a guess; both were executed (amendments #23, #24).
+    a guess; both were executed (amendments #23, #24), and the
+    flat calibration followed them out (amendment #25).
     """
     checks = {}
     checks["exceeds_single_device"] = {
@@ -576,9 +931,18 @@ def overflow_gate_verdict(model_gb: float, shards: int,
     }
     holds = all(c["pass"] for c in checks.values())
     verdict = "OVERFLOW_GATE_PASS" if holds else "OVERFLOW_GATE_FAIL"
+    premium = None
+    if flat_shard_gb is not None and flat_shard_gb > 0:
+        premium = (flat_shard_gb - max_usable_shard_gb) / flat_shard_gb
     print("\n=== OVERFLOW GATE (the heart of the thesis) ===")
     print(f"  measured min available memory: {min_available_gb} GB")
-    print(f"  measured max usable shard (calibration): {max_usable_shard_gb} GB")
+    print(f"  measured max usable shard (trace-replay calibration): {max_usable_shard_gb} GB")
+    if premium is not None:
+        word = ("EXECUTED - unfaithful, replay gates alone"
+                if premium > FRAG_PREMIUM_EXECUTION_THRESHOLD
+                else "within threshold")
+        print(f"  fragmentation premium: {premium * 100:.1f}% "
+              f"(flat {flat_shard_gb} GB) -> {word}")
     for name, c in checks.items():
         ok = "PASS" if c["pass"] else "FAIL"
         print(f"  {name}: {c['value']} (limit {c['limit']}) -> {ok}")
@@ -590,6 +954,8 @@ def overflow_gate_verdict(model_gb: float, shards: int,
         "holds": holds,
         "verdict": verdict,
         "max_usable_shard_gb": max_usable_shard_gb,
+        "flat_shard_gb": flat_shard_gb,
+        "fragmentation_premium": premium,
         "leak_slope_mb_per_token": leak_slope_mb,
     }
 
@@ -708,7 +1074,17 @@ def main():
     parser.add_argument("--calibrate-step-gb", type=float, default=0.25,
                         help="calibration resolution: max waste per shard equals one step")
     parser.add_argument("--max-usable-shard-gb", type=float, default=None,
-                        help="measured per-shard limit from --calibrate-shard")
+                        help="measured per-shard limit from --replay-calibrate (the gate consumes the replayed number)")
+    parser.add_argument("--record-trace", action="store_true",
+                        help="journal the workload allocation pattern (weights, activations, KV growth, jitter)")
+    parser.add_argument("--trace-path", type=str, default="alloc_trace.json",
+                        help="allocation trace journal path (record and replay)")
+    parser.add_argument("--replay-calibrate", action="store_true",
+                        help="pattern-aware max usable shard memory by trace-replay OOM-stepping (gates on THIS)")
+    parser.add_argument("--paired", action="store_true",
+                        help="variance report: paired standalone/swarm runs per iteration (sigma of the ratio)")
+    parser.add_argument("--flat-shard-gb", type=float, default=None,
+                        help="diagnostic flat ceiling from --calibrate-shard, recorded in the gate verdict")
     parser.add_argument("--variance-report", type=int, default=None, metavar="REPEATS",
                         help="run the stage REPEATS times and measure the noise floor")
     parser.add_argument("--reproduce-tolerance", nargs="+", metavar="REPORT_JSON",
@@ -734,6 +1110,19 @@ def main():
         save_report(result, args.report)
         return
 
+    if args.record_trace:
+        result = record_alloc_trace(
+            args.model_gb, args.shards, args.tokens, args.in_features,
+            args.trace_path,
+        )
+        save_report(result, args.report)
+        return
+
+    if args.replay_calibrate:
+        result = replay_calibrate(args.trace_path, args.calibrate_step_gb)
+        save_report(result, args.report)
+        return
+
     if args.reproduce_tolerance:
         result = reproduce_tolerance(args.reproduce_tolerance)
         save_report(result, args.report)
@@ -744,7 +1133,7 @@ def main():
             parser.error("--variance-report needs --stage 1 or --stage 2")
         result = variance_report(
             args.stage, args.variance_report, args.model_gb, args.shards,
-            args.tokens, args.in_features,
+            args.tokens, args.in_features, args.paired,
         )
         save_report(result, args.report)
         return
@@ -762,6 +1151,7 @@ def main():
         overflow_gate_verdict(
             args.model_gb, args.shards, args.per_shard_gb, args.completed_tokens,
             args.min_available_gb, args.max_usable_shard_gb, args.leak_slope_mb,
+            args.flat_shard_gb,
         )
         return
 
