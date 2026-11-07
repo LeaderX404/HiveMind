@@ -45,12 +45,26 @@ hold.
   mem_get_info, never assumed from a spec sheet) but fits
   the aggregate.
 - Each shard must stay within the MEASURED max usable shard
-  memory, obtained by OOM-stepping calibration
-  (benchmark.py --calibrate-shard) and recorded as a gate
-  fact. The fixed 6 GB was a round guess (executed in
-  amendment #23); the 0.85 safety factor was a guess about a
-  guess (executed in amendment #24). No factor survives: the
-  budget is a measurement, not a multiplication.
+  memory, obtained by TRACE-REPLAY calibration
+  (benchmark.py --replay-calibrate): the workload
+  allocation pattern - persistent weights, transient
+  activations, a KV cache that grows monotonically, and
+  jitter blocks freed out of order - is journaled and
+  replayed with OOM-stepping on the scale factor, and
+  recorded as a gate fact. The flat contiguous ceiling
+  (--calibrate-shard) survives only as a diagnostic: the
+  fragmentation premium = (flat - replayed) / flat is
+  measured and recorded, never estimated, and a premium
+  above 10% proves the flat ceiling unfaithful. The gate
+  consumes the replayed number exclusively. Calibration
+  controls are mandatory: a replay at 50% of the measured
+  limit must survive and a replay at 150% must fail; if
+  either misbehaves the calibration is invalid and no
+  number leaves the tool. The fixed 6 GB was a round guess
+  (executed in amendment #23); the 0.85 safety factor was a
+  guess about a guess (executed in amendment #24); the flat
+  calibration was a size test wearing the uniform of a
+  pattern test (executed in amendment #25).
 - The gate passes only if generation completes with at least
   MIN_COMPLETION_TOKENS (64) tokens: the shortest length
   that can expose a leak of >= 1 MB/token. The slope must be
@@ -75,12 +89,19 @@ budget and the 16-token minimum were round guesses wearing
 uniforms; both were executed two hours after carving. The
 0.85 safety factor was a fourth kind wearing the uniform of
 a fix; it was executed in amendment #24, hours after it
-survived its own audit.
+survived its own audit. Amendment #25 extends the same law
+to the tools that judge: a calibration is a hypothesis
+until it survives its own controls, and every statistical
+constant (k, the target width, the number of runs) is
+derived from a named decision, never from a round number.
 
 Amendment record: issues #22 (two-gate structure), #23
-(constant audit) and #24 (execution of the 0.85 safety
-factor: the budget becomes a measured fact), all before the
-first run; no measurements existed, so no runs were
+(constant audit), #24 (execution of the 0.85 safety
+factor: the budget becomes a measured fact) and #25 (the
+judge is also on trial: trace-replay calibration with
+mandatory controls, and a margin that is an interval
+which refuses to judge when under-powered), all before
+the first run; no measurements existed, so no runs were
 invalidated.
 
 ## 3. Anchor calibration policy
@@ -125,12 +146,34 @@ way to move a withdrawal line after the data.
 ## 6. Reproduction tolerance (derived, never chosen)
 
 The acceptance margin for an independent replay is computed
-from measurements, never picked:
+from measurements, never picked - and it is an INTERVAL,
+never a point (amendment #25):
 
-- Noise floor: run the stage 10 times
-  (--variance-report 10); the floor is REPRODUCE_K (3,
-  3-sigma: beyond it a difference is systematic, not noise)
-  times the standard deviation of TPS.
+- Noise floor: run the stage N times (--variance-report
+  N); the floor is REPRODUCE_K (3) times the standard
+  deviation. k = 3 is justified, not decorative: 3 sigma =
+  0.27% false failure per test, and at ~10 reproduction
+  tests per year that is ~0.027 false failures per year -
+  the two named decisions that derive the constant.
+- Sigma estimated from n runs is itself noisy (chi-square:
+  ~24% relative uncertainty at n=10). The report therefore
+  prints [k x sigma_lower, k x sigma_upper] from a
+  two-sided 95% interval on sigma (Wilson-Hilferty
+  quantiles, a declared approximation), with n and df on
+  the line.
+- The tool refuses judgment while it is UNDER-POWERED: if
+  the margin interval is wider than TARGET_MARGIN_WIDTH
+  (0.10, derived from the thesis floor 1.5x),
+  --reproduce-tolerance prints JUDGMENT REFUSED and exits
+  nonzero. An under-powered tool rejects nothing - it
+  abstains.
+- The number of runs is derived from the decision (the
+  detection width), never from a round number: the report
+  prints the plug-in n required until the interval is
+  narrower than the target. Paired mode (the same workload,
+  same device, standalone vs swarm, per iteration) cancels
+  the shared hardware noise and shrinks the required n
+  before any budget is spent.
 - Hardware spread: the difference of means across the
   replayed configurations.
 - Margin = max(noise floor, hardware spread), computed and
@@ -142,6 +185,8 @@ from measurements, never picked:
 - Independence is a seal chain on a repository the author
   does not own (different account, documented hardware, its
   own CI and its own timestamp), never a declaration.
+- A report that predates amendment #25 (no sigma interval
+  on the line) is not auditable and is refused.
 
 ## 7. Amendment rule
 
