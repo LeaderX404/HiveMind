@@ -109,7 +109,7 @@ it measures, and the fragmentation threshold is derived
 from sigma_noise - the chosen 10% is dead) and #27 (the
 recorder judged in time: a live capture gate before the static
 one, on-device injection with declared tolerances, and an
-extension rule for LIVE_TAGS), all before
+extension rule for LIVE_TAGS) and #29 (the blind spot measured: a coverage audit matching the journal against reality before any trace is recorded, and the ladder judged by a linter, not a gate), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -242,6 +242,43 @@ the recorder WHILE it records, and comes FIRST:
 Strict order of the four gates: live capture -> static capture ->
 calibration (with its 50%/150% controls) -> overflow verdict. Each gate
 judges one layer; none releases the next.
+
+### Coverage audit - the journal matched against reality (#29)
+
+The recorder's boundary is measured, not declared. Three rules:
+
+1. The instrument is tried first. tracemalloc is expected to be
+   blind to PyTorch CPU allocations (they bypass the Python
+   allocator); the trial runs anyway and the verdict is recorded.
+   torch.profiler must then see a known allocation, or the audit
+   refuses - an instrument that cannot see a known allocation
+   audits nothing, and a fake audit is worse than none.
+2. The journal must be a subset of reality. One known allocation
+   on the covered path (torch.empty, AUDIT_COVERED_BYTES) and one
+   on an uncovered path (torch.zeros, AUDIT_UNCOVERED_BYTES) are
+   journaled by the recorder and witnessed by the accepted
+   instrument simultaneously; every journaled allocation must be
+   corroborated entry by entry.
+3. The boundary is a number, not a docstring. The uncovered-path
+   allocation must escape the journal, and the escape is printed
+   as a measured size.
+
+Wiring: --record-trace refuses unless the audit passed in the
+same invocation, and --trace-capture-gate refuses unless the live
+gate passed in the same invocation. A single allocation on a
+path the real pattern exercises that the journal does not claim
+rejects the trace.
+
+### The ladder is judged by a linter, not a gate (#29)
+
+The ladder produces ORDER, not a number - a fifth gate would
+open an infinite regress. The linter
+(tests/unit/test_ladder_lint.py) fails the build when a layer
+lacks its gate (completeness) or a gate is wired behind its own
+prerequisite (order). The stopping rule is the Gate Law in
+CONTRIBUTING.md: every gate needs a named decision and a public
+issue; no named decision, no gate. Gates are added by decision,
+never by anxiety.
 
 ## 8. Fragmentation threshold - derived, never chosen
 
