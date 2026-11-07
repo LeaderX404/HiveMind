@@ -41,6 +41,7 @@ from hivemind.ui.tps_predictor import (
     predict_oom_risk,
     predict_tps_range,
 )
+from hivemind.ui.update_checker import check_for_update
 
 PARAMS_BYTES = 2  # rough estimate: fp16 weights, 2 bytes per parameter
 LEGACY_PROBE_MIB = 100  # shown when a cached profile predates probe-size journaling
@@ -387,6 +388,11 @@ def main() -> None:
     st.caption("Phase 2 - device profile, downloads and a "
                "primitive chat")
     profile = get_profile()
+    update = check_for_update()
+    if update:
+        st.info("New update available: **v%s** - [click here to "
+                "download](%s)"
+                % (update["version"], update["url"]))
     tab_device, tab_download, tab_models, tab_chat = st.tabs(
         ["Your device", "Download", "Local models", "Chat"])
     with tab_device:

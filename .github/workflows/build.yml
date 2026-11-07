@@ -38,11 +38,34 @@ jobs:
       - name: Build HiveMind.exe
         run: pyinstaller build.spec --noconfirm
 
+      - name: Read the release version
+        id: version
+        shell: pwsh
+        run: |
+          $raw = (Select-String -Path RELEASE.md -Pattern '^version:\s*(.+)$').Matches[0].Groups[1].Value.Trim()
+          $v = $raw.TrimStart('v')
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build HiveMind-Setup.exe
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} installer\hivemind.iss'
+
       - name: Upload HiveMind.exe
         uses: actions/upload-artifact@v4
         with:
           name: HiveMind-windows-x64
           path: dist/HiveMind.exe
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload HiveMind-Setup.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HiveMind-Setup-windows-x64
+          path: installer/Output/HiveMind-Setup.exe
           retention-days: 30
           if-no-files-found: error
 
@@ -54,8 +77,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (full history)
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Download HiveMind.exe
         uses: actions/download-artifact@v4
@@ -63,18 +88,34 @@ jobs:
           name: HiveMind-windows-x64
           path: dist/
 
-      - name: Publish or refresh the release
+      - name: Download HiveMind-Setup.exe
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-Setup-windows-x64
+          path: installer/Output/
+
+      - name: Publish (immutable releases only)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          version=$(grep '^version:' RELEASE.md | head -1 | sed 's/^version:[[:space:]]*//')
-          if [ -z "$version" ]; then
+          new_version=$(grep '^version:' RELEASE.md | head -1 | sed 's/^version:[[:space:]]*//')
+          old_version=$(git show "${{ github.event.before }}:RELEASE.md" 2>/dev/null | grep '^version:' | head -1 | sed 's/^version:[[:space:]]*//' || echo "")
+          echo "new=$new_version old=$old_version"
+          if [ -z "$new_version" ]; then
             echo "RELEASE.md has no version - nothing to publish"
             exit 1
           fi
-          echo "publishing $version"
-          gh release view "$version" || gh release create "$version" --title "HiveMind $version" --notes "Standalone Windows build. Download HiveMind.exe, double-click - nothing else to install."
-          gh release upload "$version" dist/HiveMind.exe --clobber
+          if [ "$new_version" = "$old_version" ]; then
+            echo "version line unchanged - publishing nothing"
+            exit 0
+          fi
+          if gh release view "$new_version"; then
+            echo "release $new_version already exists - refusing to overwrite it (immutable releases)"
+            exit 1
+          fi
+          echo "publishing $new_version"
+          gh release create "$new_version" --title "HiveMind $new_version" --notes "Standalone Windows build. Download HiveMind.exe or HiveMind-Setup.exe - nothing else to install."
+          gh release upload "$new_version" dist/HiveMind.exe installer/Output/HiveMind-Setup.exe
 
   release-windows:
     name: Attach HiveMind.exe to the release
@@ -90,10 +131,18 @@ jobs:
           name: HiveMind-windows-x64
           path: dist/
 
+      - name: Download HiveMind-Setup.exe
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-Setup-windows-x64
+          path: installer/Output/
+
       - name: Attach to the release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/HiveMind.exe
+          files: |
+            dist/HiveMind.exe
+            installer/Output/HiveMind-Setup.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

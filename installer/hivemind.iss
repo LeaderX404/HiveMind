@@ -1,17 +1,21 @@
-; HiveMind installer script (issue #42, wave #42).
-; Stage 3 starter: compile with Inno Setup after PyInstaller
-; produces dist/HiveMind.exe -  iscc installer\hivemind.iss
-; Not wired into CI yet: the next stage compiles Setup.exe in
-; the build workflow (choco install innosetup) and attaches it
-; to the release next to the bare exe.
+; HiveMind installer script (issues #43/#44, waves #42-#43).
+; Compiled in CI: choco install innosetup, then
+;   iscc /DMyAppVersion=<x.y.z> installer\hivemind.iss
+; CI passes the version from RELEASE.md so the Setup.exe always
+; matches the release it ships with. Output goes to Output/.
+
+#ifndef MyAppVersion
+#define MyAppVersion "0.1.1"
+#endif
 
 [Setup]
 AppId={{1A2B3C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D}
 AppName=HiveMind
-AppVersion=0.1.0
+AppVersion={#MyAppVersion}
 AppPublisher=LeaderX404
-DefaultDirName={localappdata}\HiveMind
+DefaultDirName={localappdata}\Programs\HiveMind
 DefaultGroupName=HiveMind
+OutputDir=Output
 OutputBaseFilename=HiveMind-Setup
 PrivilegesRequired=lowest
 Compression=lzma2
@@ -25,6 +29,9 @@ Source: "..\dist\HiveMind.exe"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{userdesktop}\HiveMind"; Filename: "{app}\HiveMind.exe"
 Name: "{group}\HiveMind"; Filename: "{app}\HiveMind.exe"
+
+[Run]
+Filename: "{app}\HiveMind.exe"; Description: "Launch HiveMind"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
