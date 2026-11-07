@@ -1,0 +1,68 @@
+name: Build HiveMind.exe
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build standalone Windows executable
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install streamlit pyinstaller
+
+      - name: Generate protobuf files
+        run: |
+          python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
+
+      - name: Build HiveMind.exe
+        run: pyinstaller build.spec --noconfirm
+
+      - name: Upload HiveMind.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: HiveMind-windows-x64
+          path: dist/HiveMind.exe
+          retention-days: 30
+          if-no-files-found: error
+
+  release-windows:
+    name: Attach HiveMind.exe to the release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download HiveMind.exe
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-windows-x64
+          path: dist/
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/HiveMind.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
