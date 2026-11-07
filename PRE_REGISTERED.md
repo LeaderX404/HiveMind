@@ -38,13 +38,20 @@ crime as editing the thresholds.
 Tests the heart: running a model that no single device can
 hold.
 
-- At least MIN_DEVICES (3) devices, none able to hold the
-  model alone.
-- A real 4-bit MoE whose total size exceeds one device memory
-  (DEVICE_MEMORY_GB = 8) but fits the aggregate.
-- Each shard must stay within PER_SHARD_BUDGET_GB (6).
+- At least MIN_DEVICES (3) devices. Fewer than 3 is a pair,
+  not a swarm: no routing, no meaningful coordination tax.
+- A real 4-bit MoE whose total size exceeds the smallest
+  MEASURED available device memory (recorded per run via
+  mem_get_info, never assumed from a spec sheet) but fits
+  the aggregate.
+- Each shard must stay within MIN_AVAILABLE_GB x
+  SAFETY_FACTOR (0.85, OS/runtime overhead margin). The old
+  fixed 6 GB was a round guess wearing a uniform; it was
+  executed in amendment #23.
 - The gate passes only if generation completes with at least
-  MIN_COMPLETION_TOKENS (16) tokens.
+  MIN_COMPLETION_TOKENS (64) tokens: the shortest length
+  that can expose a leak of >= 1 MB/token. The slope must be
+  measured on a separate 256-token probe run and recorded.
 
 Verdict: OVERFLOW_GATE_PASS / OVERFLOW_GATE_FAIL, printed by
 benchmark.py --gate overflow from recorded run facts. A fail
@@ -57,8 +64,16 @@ two devices at >= 1.5x the model size per dollar at the same
 TPS. A fail kills the thesis. Cost: about one week.
 
 No talk about 100B before BOTH gates pass, in this order.
-Amendment record: issue #22 (opened before the first run; no
-measurements existed, so no runs were invalidated).
+
+Constant law (amendment #23): every constant in benchmark.py
+is either (a) derived from a named decision, (b) measured and
+recorded per run, or (c) swept. No fourth kind. The 6 GB
+budget and the 16-token minimum were round guesses wearing
+uniforms; both were executed two hours after carving.
+
+Amendment record: issue #22 (two-gate structure) and issue
+#23 (constant audit), both before the first run; no
+measurements existed, so no runs were invalidated.
 
 ## 3. Anchor calibration policy
 
