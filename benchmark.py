@@ -494,6 +494,7 @@ def calibrate_shard(step_gb: float) -> dict:
     }
     print(json.dumps(result, indent=2))
     print("diagnostic contiguous ceiling only (amendment #25): "
+          "the gate consumes the trace-replay number (--replay-calibrate)")
     return result
 
 
@@ -707,6 +708,8 @@ def runs_required(stdev: float, mean: float) -> Optional[int]:
         if REPRODUCE_K * (hi - lo) / mean < TARGET_MARGIN_WIDTH:
             return n
     return None
+
+
 def variance_report(stage: int, repeats: int, model_gb: float,
                     shards: int, tokens: int, in_features: int,
                     paired: bool = False) -> dict:
