@@ -203,6 +203,15 @@ anxiety: a new named decision ("we do not accept X") opens an
 issue and earns a gate; no new named decision, no new gate. The
 stopping rule is this law itself, not a constant.
 
+## 📏 README Honesty Rule (issue #32)
+
+Any README sentence that carries a number, a comparison, or an
+absolute word ("never", "always", "revolutionizing") requires
+either (a) a published measurement behind it, or (b) an explicit
+"not yet measured" label. No exceptions. A README passes this
+rule by deleting its unmeasured numbers or by labeling them -
+not by keeping them naked.
+
 ## 🎓 Getting Help
 
 If you need help:

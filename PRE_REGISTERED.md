@@ -112,7 +112,13 @@ one, on-device injection with declared tolerances, and an
 extension rule for LIVE_TAGS) and #29 (the blind spot measured: a coverage audit matching the journal against reality before any trace is recorded, and the ladder judged by a linter, not a gate) and #30 (the ladder enforced at runtime: every gate
 refuses without its predecessor passed in the same invocation -
 the linter guards the text, the enforcement test guards the
-behavior), all before
+behavior) and #32 (the four published metrics,
+the A-E ratio to INTERACTIVE_FLOOR = 3 tok/s, and the
+deliberate memory pressure protocol - stress-ng pressing the
+device while generation runs simultaneously, N = 20 runs,
+median and p95, false acceptance target 0, false rejection
+rate published - all frozen before any measurement, and the
+README carries no number without a source), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -307,7 +313,39 @@ The fixed 10% is **dead** - it was a type-four constant.
 If no variance report exists, the threshold **cannot be derived** and the tool
 exits with an explicit error. No default. No fallback.
 
-## 9. Amendment rule
+## 9. The four published metrics and the A-E ratio (issue #32)
+
+Frozen before the first measurement of any of them:
+
+- INTERACTIVE_FLOOR = 3 tok/s (a named decision: a comfortable
+  human reading rate - below it, "interactive" is a lie). This is
+  the floor of the README's A-E levels, distinct from
+  MIN_INTERACTIVE_TPS = 1.0 in section 1 (the swarm thesis's
+  "it runs" definition); the two answer different questions.
+- The A-E usability levels are RATIOS to that floor, not fixed
+  thresholds: ratio = predicted_tps / INTERACTIVE_FLOOR;
+  A: ratio > 1 (fits + fast), B: 0.5-1 (fits, slow),
+  C: 0.1-0.5 (overflow, usable), D: 0.01-0.1 (overflow,
+  background), E: < 0.01 (proof of concept).
+- Deliberate memory pressure test: stress-ng presses the device
+  to a measured budget while generation runs simultaneously,
+  N = 20 runs, median and p95 recorded.
+- False acceptance: target = 0 in N = 20 runs. One kill in
+  twenty fails the metric.
+- False rejection rate: published whatever it turns out to be.
+- Peak prediction error: median and p95 of the signed relative
+  error (predicted peak vs measured peak), published.
+- Bandwidth efficiency: measured sustained / theoretical, as a
+  percentage, published.
+
+README status cells stay "Not measured" until the 3-device
+campaign records the number, and the README honesty rule in
+CONTRIBUTING.md polices every number, comparison and absolute
+word. No fourth kind here either: every constant above is (a)
+derived from a named decision or (b) to be measured and
+recorded when the campaign runs.
+
+## 10. Amendment rule
 
 Any edit to this covenant invalidates all prior runs, requires a
 new seal, and an open issue announcing the invalidation - the
