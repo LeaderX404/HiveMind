@@ -106,7 +106,10 @@ mandatory controls, and a margin that is an interval
 which refuses to judge when under-powered) and #26 (the
 ruler of the ruler: the capture layer is judged before
 it measures, and the fragmentation threshold is derived
-from sigma_noise - the chosen 10% is dead), all before
+from sigma_noise - the chosen 10% is dead) and #27 (the
+recorder judged in time: a live capture gate before the static
+one, on-device injection with declared tolerances, and an
+extension rule for LIVE_TAGS), all before
 the first run; no measurements existed, so no runs were
 invalidated.
 
@@ -207,6 +210,38 @@ The tracing layer (`--record-trace`) is not trusted by default. Before any
 
 Calibration without the capture gate is **rejected** - the number is treated as
 if it was never measured.
+
+The journal is PyTorch-level, never OS-level: per-token activations must
+close their accounting at the PyTorch allocator. An OS-level RSS trace sees
+the caching allocator's reserved pools and never closes - the gate would
+reject honest traces. The injection level always matches the source the
+calibration reads, never a mixed one.
+
+LIVE_TAGS is extensible only by an open issue that names the new tag and
+why it is legitimately alive at journal end (MoE expert buffers retained
+between tokens will need exactly such an issue when the first real MoE
+trace lands).
+
+A fourth static check judges the device itself: a real on-device injection,
+witnessed by the device's own counter (CUDA: torch.cuda.memory_stats()
+delta within +/-1%; no CUDA: psutil RSS delta within +/-5%, the caching
+allocator's declared noise). No reliable injection path available: the
+gate refuses - a fake injection is worse than none.
+
+### Live capture gate - the recorder judged while it records (#27)
+
+The static checks judge the journal AFTER the fact; the live gate judges
+the recorder WHILE it records, and comes FIRST:
+1. **Positive live:** 10 known allocations during the recording window,
+   captured in order at the right sizes.
+2. **Negative live:** allocations outside the recording window produce
+   ZERO records - a recorder without boundaries poisons the analysis.
+3. **Live determinism:** the same live pattern, recorded twice, produces
+   the same journal.
+
+Strict order of the four gates: live capture -> static capture ->
+calibration (with its 50%/150% controls) -> overflow verdict. Each gate
+judges one layer; none releases the next.
 
 ## 8. Fragmentation threshold - derived, never chosen
 
