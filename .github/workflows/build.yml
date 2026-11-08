@@ -74,17 +74,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
+          # gh exits 0 even when no asset matches the pattern:
+          # never trust the exit code - count the files instead.
+          New-Item -ItemType Directory -Force -Path prev | Out-Null
           $tag = gh release list --limit 1 --json tagName --jq ".[0].tagName"
-          if ($tag) {
+          if (-not $tag) {
+            Write-Output "no previous release - the patch will be full"
+          } else {
             gh release download $tag --pattern "HiveMind-UI-*.zip" --dir prev --clobber
-            if ($LASTEXITCODE -eq 0) {
-              Get-ChildItem prev -Filter *.zip | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
+            $code = $LASTEXITCODE
+            $zips = @(Get-ChildItem prev -Filter *.zip)
+            if ($code -eq 0 -and $zips.Count -gt 0) {
+              $zips | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
               Write-Output "previous UI bundle: prev/prev-ui.zip"
             } else {
               Write-Output "no previous UI bundle - the patch will be full"
             }
-          } else {
-            Write-Output "no previous release - the patch will be full"
           }
 
       - name: Generate the update manifest and the UI patch
@@ -188,7 +193,7 @@ jobs:
             exit 1
           fi
           echo "publishing $new_version"
-          gh release create "$new_version" --title "HiveMind $new_version" --notes "Onedir architecture (wave #47): run HiveMind-Setup.exe - the heavy core (torch, transformers) downloads once on first run. Existing installs update via SHA-256-verified delta patches."
+          gh release create "$new_version" --target ${{ github.sha }} --title "HiveMind $new_version" --notes "Onedir architecture (wave #47): run HiveMind-Setup.exe - the heavy core (torch, transformers) downloads once on first run. Existing installs update via SHA-256-verified delta patches."
           gh release upload "$new_version" publish/HiveMind-Setup.exe publish/HiveMind-UI-windows-x64.zip publish/HiveMind-Core-windows-x64.zip publish/HiveMind-UI-patch.zip publish/update_manifest.json
 
   release-windows:
