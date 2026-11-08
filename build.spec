@@ -17,6 +17,14 @@
 # PyInstaller 6 dialect: the legacy encryption and embedded
 # archive spec arguments were removed upstream, and passing
 # them crashes the spec evaluator.
+#
+# Deterministic patches (wave #48): the CI pins SOURCE_DATE_EPOCH
+# and runs installer/normalize_build.py after pyinstaller, so two
+# builds of identical sources produce byte-identical artifacts
+# and a UI-only wave ships a UI-only patch (<= 20 MB gate). Keep
+# this spec free of anything that varies per build: no dates, no
+# environment snapshots, no random ordering - a single nondeter-
+# ministic byte here re-enters every future patch.
 import os
 import sys
 

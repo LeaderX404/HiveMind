@@ -36,13 +36,24 @@ jobs:
           python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
 
       - name: Build the onedir app
+        # Deterministic patches (wave #48): SOURCE_DATE_EPOCH is the
+        # reproducible-builds standard for pinning embedded timestamps.
+        # The normalize step below enforces the same epoch by hand, so
+        # identical sources must produce byte-identical exes and a
+        # UI-only wave ships a UI-only patch (gate: <= 20 MB).
+        env:
+          SOURCE_DATE_EPOCH: "946684800"
         run: pyinstaller build.spec --noconfirm
 
-      - name: Bundle the app directory
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist/HiveMind-UI", "HiveMind-UI-windows-x64.zip")
+      - name: Normalize the build and bundle the app directory
+        # installer/normalize_build.py pins every remaining source of
+        # build-to-build noise: PE TimeDateStamp fields in exe/dll/pyd,
+        # the mtime word in timestamp-based .pyc headers, file mtimes,
+        # and the UI zip entry metadata (fixed dates, sorted order) -
+        # so the patch gate can hold release after release.
+        env:
+          SOURCE_DATE_EPOCH: "946684800"
+        run: python installer/normalize_build.py --ui-dir dist/HiveMind-UI --epoch 946684800 --zip HiveMind-UI-windows-x64.zip
 
       - name: Build the core bundle (heavy libraries, downloaded once per machine)
         shell: pwsh
@@ -229,13 +240,16 @@ jobs:
           python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
 
       - name: Build the onedir app
+        # Deterministic patches (wave #48): same rationale as the
+        # build job - SOURCE_DATE_EPOCH plus the normalize step.
+        env:
+          SOURCE_DATE_EPOCH: "946684800"
         run: pyinstaller build.spec --noconfirm
 
-      - name: Bundle the app directory
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist/HiveMind-UI", "HiveMind-UI-windows-x64.zip")
+      - name: Normalize the build and bundle the app directory
+        env:
+          SOURCE_DATE_EPOCH: "946684800"
+        run: python installer/normalize_build.py --ui-dir dist/HiveMind-UI --epoch 946684800 --zip HiveMind-UI-windows-x64.zip
 
       - name: Build the core bundle
         shell: pwsh
