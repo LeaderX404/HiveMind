@@ -8,7 +8,7 @@
 ; /DCoreSha256 so every release verifies exactly the archive
 ; it published.
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.4"
+#define MyAppVersion "0.1.5"
 #endif
 #ifndef CoreUrl
 #define CoreUrl ""
