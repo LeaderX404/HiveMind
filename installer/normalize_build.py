@@ -25,6 +25,13 @@ would poison the manifest with nondeterministic bytes.
 Usage:
     python installer/normalize_build.py --ui-dir dist/HiveMind-UI
         --epoch 946684800 --zip HiveMind-UI-windows-x64.zip
+
+Verification protocol (wave #48): two dry-run builds from
+identical sources must produce byte-identical UI bundles.
+The CI artifacts API exposes a sha256 digest per artifact,
+so the comparison needs no log access: matching digests
+across independent builds is proof of determinism; matching
+sizes alone is only weak evidence.
 """
 import argparse
 import os
