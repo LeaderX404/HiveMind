@@ -1,14 +1,19 @@
-"""HiveMind launcher - the double-click entry (issues #41, #42, #44).
+"""HiveMind launcher - the double-click entry (issues #41, #42,
+#44, #46).
 
-Frozen by PyInstaller this module is the body of HiveMind.exe:
-it starts the Streamlit server on a free local port, opens the
-default browser once the server answers, and keeps the process
-alive until the server dies. The build is windowed - no console
-- so stdout and stderr are redirected to a log file first: a
-silent failure is the one failure we never allow. Issue #44:
-frozen builds write launcher.log next to the exe (not in
-~/.hivemind), and the Debug target (HiveMind-Debug.exe) keeps
-a console so the first crash is printed, not buried.
+The MAIN THREAD runs the Streamlit server and nothing else.
+Streamlit registers signal handlers while booting, and Python
+allows that only in the main thread (issue #46: the old flow
+ran the server in a background thread, and Streamlit died at
+once with "signal only works in main thread of the main
+interpreter"). The browser and the tray icon live in daemon
+threads and never touch the main thread. The build is windowed
+- no console - so stdout and stderr are redirected to a log
+file first: a silent failure is the one failure we never
+allow. Issue #44: frozen builds write launcher.log next to the
+exe (not in ~/.hivemind), and the Debug target
+(HiveMind-Debug.exe) keeps a console so the first crash is
+printed, not buried.
 
 Wave #42: a system tray icon owns the taskbar after the browser
 closes - "Open HiveMind" reopens the app, "Quit" ends the
@@ -21,9 +26,12 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 
 LOG_DIR = os.path.join(os.path.expanduser("~"), ".hivemind")
+PREFERRED_PORT = 8501
+START_TIMEOUT_SECONDS = 120
 
 
 def _debug_build():
@@ -40,8 +48,6 @@ def _log_path():
         return os.path.join(os.path.dirname(sys.executable),
                             "launcher.log")
     return os.path.join(LOG_DIR, "launcher.log")
-PREFERRED_PORT = 8501
-START_TIMEOUT_SECONDS = 120
 
 
 def _redirect_output():
@@ -96,14 +102,29 @@ def _configure(port):
     os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
 
 
-def _server_thread(app_path, failed):
-    """Run Streamlit's own CLI in this thread; record any death."""
+def _background(port):
+    """Everything except the server: wait for the port to answer,
+    open the browser, then hold the tray (or the heartbeat
+    fallback). Daemon thread - the server owns the main thread
+    (issue #46)."""
+    deadline = time.monotonic() + START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline and not _port_answers(port):
+        time.sleep(0.5)
+    if not _port_answers(port):
+        print("launcher: server did not answer within %d s"
+              % START_TIMEOUT_SECONDS)
+        return
+    url = "http://localhost:%d" % port
+    print("launcher: server up, opening %s" % url)
+    webbrowser.open(url)
     try:
-        from streamlit.web import cli as st_cli
-        sys.argv = ["streamlit", "run", app_path]
-        st_cli.main()
-    except BaseException as exc:
-        failed.append("%s: %s" % (type(exc).__name__, exc))
+        if _run_tray(url, port):
+            return
+    except Exception as exc:
+        print("launcher: tray failed (%s) - heartbeat fallback" % exc)
+    while _port_answers(port):
+        time.sleep(2.0)
+    print("launcher: server stopped")
 
 
 def _tray_image():
@@ -129,8 +150,9 @@ def _watch_server(port, icon):
 
 
 def _run_tray(url, port):
-    """Own the main thread with the tray icon. False when pystray
-    is unavailable (dev runs) - the caller falls back."""
+    """Hold the taskbar with the tray icon from a background
+    thread. False when pystray is unavailable (dev runs) - the
+    caller falls back."""
     try:
         import pystray
     except ImportError:
@@ -142,8 +164,11 @@ def _run_tray(url, port):
         webbrowser.open(url)
 
     def _quit(icon, item):
+        """The server owns the main thread, so Quit ends the whole
+        process on purpose - nothing ghosts in Task Manager."""
         print("launcher: quit requested from the tray")
         icon.stop()
+        os._exit(0)
 
     menu = pystray.Menu(
         pystray.MenuItem("Open HiveMind", _reopen),
@@ -154,12 +179,13 @@ def _run_tray(url, port):
                      daemon=True).start()
     print("launcher: tray icon ready")
     icon.run()
-    print("launcher: tray stopped, exiting")
+    print("launcher: tray stopped")
     return True
 
 
 def main():
-    """Start the server, open the browser, hold the tray."""
+    """The main thread IS the Streamlit server (issue #46); the
+    browser and the tray run in background threads."""
     if _debug_build():
         print("launcher: debug build - output stays on this console")
     else:
@@ -173,33 +199,16 @@ def main():
         return 1
     port = _free_port(PREFERRED_PORT)
     _configure(port)
-    failed = []
-    threading.Thread(target=_server_thread, args=(app_path, failed),
+    threading.Thread(target=_background, args=(port,),
                      daemon=True).start()
-    deadline = time.monotonic() + START_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        if failed:
-            print("launcher: server failed to start: %s" % failed[0])
-            return 1
-        if _port_answers(port):
-            break
-        time.sleep(0.5)
-    else:
-        print("launcher: server did not answer within %d s"
-              % START_TIMEOUT_SECONDS)
-        return 1
-    url = "http://localhost:%d" % port
-    print("launcher: server up, opening %s" % url)
-    webbrowser.open(url)
     try:
-        if _run_tray(url, port):
-            return 0
-    except Exception as exc:
-        print("launcher: tray failed (%s) - heartbeat fallback" % exc)
-    while not failed and _port_answers(port):
-        time.sleep(2.0)
-    if failed:
-        print("launcher: server died: %s" % failed[0])
+        from streamlit.web import cli as st_cli
+        sys.argv = ["streamlit", "run", app_path]
+        st_cli.main()
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
         return 1
     print("launcher: server stopped")
     return 0

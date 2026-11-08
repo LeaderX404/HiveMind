@@ -16,4 +16,4 @@ traceback when something dies.
 The classic tag path (v*) still works and adds generated
 release notes.
 
-version: v0.1.2
+version: v0.1.3

@@ -14,7 +14,7 @@ import os
 import time
 import urllib.request
 
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 RELEASES_API = ("https://api.github.com/repos/LeaderX404/HiveMind/"
                 "releases/latest")
 RELEASES_PAGE = ("https://github.com/LeaderX404/HiveMind/"
