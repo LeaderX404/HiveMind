@@ -1,92 +1,89 @@
-# -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec: build the standalone HiveMind.exe
-# (issues #41, #42, #44). One file, everything inside: the
-# Python interpreter, streamlit, torch, transformers,
-# huggingface_hub, pystray. The user installs nothing.
+# HiveMind build spec (issues #41, #42, #44, wave #47).
 #
-# Two targets share one Analysis:
-#   HiveMind        - windowed (console=False): the public face
-#   HiveMind-Debug  - console=True: a black window that prints
-#                     the real traceback when the windowed exe
-#                     dies silently (issue #44). Debug is an
-#                     Actions artifact, never a release file.
-import os
-import sys
+# ONEDIR architecture (wave #47): the output is a directory
+# (dist/HiveMind-UI/) holding two tiny executables -
+# HiveMind.exe (windowed) and HiveMind-Debug.exe (console,
+# issue #44) - plus an _internal/ tree. The heavy libraries
+# (torch, transformers, ...) are NOT frozen: they live in
+# core\ beside the app dir, downloaded once at first run and
+# reused by every update.
+#
+# The application code itself (hivemind/, app.py,
+# launcher_app.py) ships as PLAIN DATA inside _internal so a
+# normal release is a kilobyte-scale delta patch, not a full
+# exe rebuild. Only launcher.py - the 20-line shim - is
+# compiled into the executable.
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-from PyInstaller.utils.hooks import (collect_all, collect_data_files,
-                                     collect_submodules)
+# Heavy imports are resolved at runtime from core\, never
+# frozen: excluding them keeps the UI bundle small and the
+# executable stable across normal releases.
+_core_packages = ["torch", "transformers", "huggingface_hub",
+                   "tokenizers", "safetensors", "sentencepiece",
+                   "accelerate", "bitsandbytes", "numpy"]
+excludes = []
+for _pkg in _core_packages:
+    excludes.append(_pkg)
+    excludes.append(_pkg + ".*")
 
-sys.path.insert(0, os.path.abspath("."))
+# Streamlit has runtime-discovered pieces the analyzer cannot
+# see: collect everything it needs (static files, metadata).
+st_datas, st_binaries, st_hiddenimports = collect_all("streamlit")
+tray_hiddenimports = collect_submodules("pystray") + \
+    collect_submodules("PIL")
 
-datas = []
-binaries = []
-hiddenimports = []
+block_cipher = None
+a = Analysis(["launcher.py"],
+             pathex=[],
+             binaries=st_binaries,
+             datas=st_datas,
+             hiddenimports=st_hiddenimports + tray_hiddenimports,
+             hookspath=[],
+             runtime_hooks=[],
+             excludes=excludes,
+             cipher=block_cipher)
 
-# Runtime packages with dynamic imports: collected whole so the
-# exe never says "module not found" on a user machine.
-for package in ("streamlit", "transformers", "huggingface_hub",
-                "tokenizers", "safetensors", "sentencepiece",
-                "pystray", "PIL"):
-    pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
-    datas += pkg_datas
-    binaries += pkg_binaries
-    hiddenimports += pkg_hidden
+# The application code travels as data (wave #47): delta
+# patches replace these files without touching the exe.
+a.datas.append(("app.py", "app.py", "DATA"))
+a.datas.append(("launcher_app.py", "launcher_app.py", "DATA"))
+a.datas.append(("hivemind", "hivemind", "DATA"))
+# ...and stays out of the frozen analysis.
+a.excludes += ["hivemind", "hivemind.*", "launcher_app"]
 
-# Issue #44 (silent crash): belt and suspenders. collect_all
-# should cover these, but the windowed exe died on a real
-# machine, so the two heaviest packages get pinned explicitly:
-# streamlit's static/ folder and transformers' metadata must
-# ship, or the server collapses the moment it starts serving.
-hiddenimports += collect_submodules("streamlit")
-hiddenimports += collect_submodules("transformers")
-datas += collect_data_files("streamlit")
-datas += collect_data_files("transformers")
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# The whole local package - paged engines, UI, downloads.
-hiddenimports += collect_submodules("hivemind")
+exe = EXE(pyz,
+          a.scripts,
+          [],
+          exclude_binaries=True,
+          name="HiveMind",
+          console=False,
+          icon=None,
+          debug=False,
+          strip=False,
+          upx=False)
 
-# app.py travels as a data file; the launcher hands it to
-# Streamlit at runtime.
-datas.append(("app.py", "."))
+# The console twin for crash triage (issue #44): same bundle,
+# black window, full traceback on screen.
+exe_debug = EXE(pyz,
+                a.scripts,
+                [],
+                exclude_binaries=True,
+                name="HiveMind-Debug",
+                console=True,
+                icon=None,
+                debug=False,
+                strip=False,
+                upx=False)
 
-a = Analysis(
-    ["launcher.py"],
-    pathex=["."],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
-    hookspath=[],
-    runtime_hooks=[],
-    excludes=["tkinter"],
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="HiveMind",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-)
-
-exe_debug = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="HiveMind-Debug",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=True,
-)
+# One _internal shared by both executables; COLLECT merges the
+# analysis TOCs and the two EXE objects into dist/HiveMind-UI/.
+coll = COLLECT(exe,
+               exe_debug,
+               a.binaries,
+               a.zipfiles,
+               a.datas,
+               strip=False,
+               upx=False,
+               name="HiveMind-UI")

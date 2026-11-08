@@ -11,9 +11,9 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build standalone Windows executable
+    name: Build the onedir app and the core bundle
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -35,8 +35,24 @@ jobs:
         run: |
           python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
 
-      - name: Build HiveMind.exe
+      - name: Build the onedir app
         run: pyinstaller build.spec --noconfirm
+
+      - name: Bundle the app directory
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist/HiveMind-UI", "HiveMind-UI-windows-x64.zip")
+
+      - name: Build the core bundle (heavy libraries, downloaded once per machine)
+        shell: pwsh
+        run: |
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*torch' -and $_ -notmatch '^\s*accelerate' -and $_ -notmatch '^\s*bitsandbytes' } | Set-Content core-reqs.txt
+          pip install --target core -r core-reqs.txt
+          pip install --target core --no-deps "accelerate>=0.20.0" "bitsandbytes>=0.39.0"
+          pip install --target core "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("core", "HiveMind-Core-windows-x64.zip")
 
       - name: Read the release version
         id: version
@@ -46,18 +62,46 @@ jobs:
           $v = $raw.TrimStart('v')
           "version=$v" >> $env:GITHUB_OUTPUT
 
+      - name: Hash the core bundle
+        id: corehash
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash -Path "HiveMind-Core-windows-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          "sha256=$h" >> $env:GITHUB_OUTPUT
+
+      - name: Fetch the previous UI bundle (for the patch diff)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = gh release list --limit 1 --json tagName --jq ".[0].tagName"
+          if ($tag) {
+            gh release download $tag --pattern "HiveMind-UI-*.zip" --dir prev --clobber
+            if ($LASTEXITCODE -eq 0) {
+              Get-ChildItem prev -Filter *.zip | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
+              Write-Output "previous UI bundle: prev/prev-ui.zip"
+            } else {
+              Write-Output "no previous UI bundle - the patch will be full"
+            }
+          } else {
+            Write-Output "no previous release - the patch will be full"
+          }
+
+      - name: Generate the update manifest and the UI patch
+        run: python installer/make_manifest.py --ui-dir dist/HiveMind-UI --core-zip HiveMind-Core-windows-x64.zip --version ${{ steps.version.outputs.version }} --prev-ui-zip prev/prev-ui.zip --out-dir .
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
       - name: Build HiveMind-Setup.exe
         shell: pwsh
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} installer\hivemind.iss'
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} /DCoreUrl=https://github.com/LeaderX404/HiveMind/releases/download/v${{ steps.version.outputs.version }}/HiveMind-Core-windows-x64.zip /DCoreSha256=${{ steps.corehash.outputs.sha256 }} installer\hivemind.iss'
 
-      - name: Upload HiveMind.exe
+      - name: Upload the app bundle (includes HiveMind-Debug.exe)
         uses: actions/upload-artifact@v4
         with:
-          name: HiveMind-windows-x64
-          path: dist/HiveMind.exe
+          name: HiveMind-UI-windows-x64
+          path: HiveMind-UI-windows-x64.zip
           retention-days: 30
           if-no-files-found: error
 
@@ -69,13 +113,21 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # Debug build (issue #44): artifact only - the black
-      # window prints the traceback that kills the windowed exe.
-      - name: Upload HiveMind-Debug.exe
+      - name: Upload the core bundle
         uses: actions/upload-artifact@v4
         with:
-          name: HiveMind-Debug-windows-x64
-          path: dist/HiveMind-Debug.exe
+          name: HiveMind-Core-windows-x64
+          path: HiveMind-Core-windows-x64.zip
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload the update manifest and patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: HiveMind-Update-windows-x64
+          path: |
+            update_manifest.json
+            HiveMind-UI-patch.zip
           retention-days: 30
           if-no-files-found: error
 
@@ -92,17 +144,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download HiveMind.exe
-        uses: actions/download-artifact@v4
-        with:
-          name: HiveMind-windows-x64
-          path: dist/
-
       - name: Download HiveMind-Setup.exe
         uses: actions/download-artifact@v4
         with:
           name: HiveMind-Setup-windows-x64
-          path: installer/Output/
+          path: publish/
+
+      - name: Download the app bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-UI-windows-x64
+          path: publish/
+
+      - name: Download the core bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-Core-windows-x64
+          path: publish/
+
+      - name: Download the manifest and patch
+        uses: actions/download-artifact@v4
+        with:
+          name: HiveMind-Update-windows-x64
+          path: publish/
 
       - name: Publish (immutable releases only)
         env:
@@ -112,47 +176,100 @@ jobs:
           old_version=$(git show "${{ github.event.before }}:RELEASE.md" 2>/dev/null | grep '^version:' | head -1 | sed 's/^version:[[:space:]]*//' || echo "")
           echo "new=$new_version old=$old_version"
           if [ -z "$new_version" ]; then
-            echo "RELEASE.md has no version - nothing to publish"
+            echo "RELEASE.md has no version line - refusing to publish"
             exit 1
           fi
           if [ "$new_version" = "$old_version" ]; then
             echo "version line unchanged - publishing nothing"
             exit 0
           fi
-          if gh release view "$new_version"; then
+          if gh release view "$new_version" > /dev/null 2>&1; then
             echo "release $new_version already exists - refusing to overwrite it (immutable releases)"
             exit 1
           fi
           echo "publishing $new_version"
-          gh release create "$new_version" --title "HiveMind $new_version" --notes "Standalone Windows build. Download HiveMind.exe or HiveMind-Setup.exe - nothing else to install."
-          gh release upload "$new_version" dist/HiveMind.exe installer/Output/HiveMind-Setup.exe
+          gh release create "$new_version" --title "HiveMind $new_version" --notes "Onedir architecture (wave #47): run HiveMind-Setup.exe - the heavy core (torch, transformers) downloads once on first run. Existing installs update via SHA-256-verified delta patches."
+          gh release upload "$new_version" publish/HiveMind-Setup.exe publish/HiveMind-UI-windows-x64.zip publish/HiveMind-Core-windows-x64.zip publish/HiveMind-UI-patch.zip publish/update_manifest.json
 
   release-windows:
-    name: Attach HiveMind.exe to the release
-    needs: build-windows
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    name: Attach Windows builds to the tag
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    timeout-minutes: 120
     permissions:
       contents: write
     steps:
-      - name: Download HiveMind.exe
-        uses: actions/download-artifact@v4
-        with:
-          name: HiveMind-windows-x64
-          path: dist/
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-      - name: Download HiveMind-Setup.exe
-        uses: actions/download-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: HiveMind-Setup-windows-x64
-          path: installer/Output/
+          python-version: "3.11"
+          cache: pip
 
-      - name: Attach to the release
-        uses: softprops/action-gh-release@v1
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install streamlit pyinstaller pystray Pillow
+
+      - name: Generate protobuf files
+        run: |
+          python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
+
+      - name: Build the onedir app
+        run: pyinstaller build.spec --noconfirm
+
+      - name: Bundle the app directory
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("dist/HiveMind-UI", "HiveMind-UI-windows-x64.zip")
+
+      - name: Build the core bundle
+        shell: pwsh
+        run: |
+          Get-Content requirements.txt | Where-Object { $_ -notmatch '^\s*torch' -and $_ -notmatch '^\s*accelerate' -and $_ -notmatch '^\s*bitsandbytes' } | Set-Content core-reqs.txt
+          pip install --target core -r core-reqs.txt
+          pip install --target core --no-deps "accelerate>=0.20.0" "bitsandbytes>=0.39.0"
+          pip install --target core "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("core", "HiveMind-Core-windows-x64.zip")
+
+      - name: Read the release version
+        id: version
+        shell: pwsh
+        run: |
+          $raw = (Select-String -Path RELEASE.md -Pattern '^version:\s*(.+)$').Matches[0].Groups[1].Value.Trim()
+          $v = $raw.TrimStart('v')
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Hash the core bundle
+        id: corehash
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash -Path "HiveMind-Core-windows-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          "sha256=$h" >> $env:GITHUB_OUTPUT
+
+      - name: Generate the update manifest and the UI patch
+        run: python installer/make_manifest.py --ui-dir dist/HiveMind-UI --core-zip HiveMind-Core-windows-x64.zip --version ${{ steps.version.outputs.version }} --prev-ui-zip prev/prev-ui.zip --out-dir .
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build HiveMind-Setup.exe
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} /DCoreUrl=https://github.com/LeaderX404/HiveMind/releases/download/v${{ steps.version.outputs.version }}/HiveMind-Core-windows-x64.zip /DCoreSha256=${{ steps.corehash.outputs.sha256 }} installer\hivemind.iss'
+
+      - name: Attach the release files to the tag
+        uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/HiveMind.exe
-            installer/Output/HiveMind-Setup.exe
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            installer/Output/HiveMind-Setup.exe
+            HiveMind-UI-windows-x64.zip
+            HiveMind-Core-windows-x64.zip
+            HiveMind-UI-patch.zip
+            update_manifest.json

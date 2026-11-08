@@ -1,19 +1,22 @@
 # Release channel
 
 Releases are immutable. A new release is published ONLY when
-the version line below changes on main; pushing anything else
-publishes nothing. Reusing a version number fails the build on
-purpose (the workflow refuses to overwrite an existing release),
-and old releases are never touched - they stay on the Releases
-page exactly as they shipped.
+the version line below changes on main; any other push
+publishes nothing. Reusing a version number fails the
+publishing job on purpose, and old releases are never
+touched.
 
-Each release carries two files: HiveMind.exe (standalone, just
-double-click) and HiveMind-Setup.exe (installer: per-user
-folder, desktop and Start menu shortcuts, clean uninstaller).
-A console build (HiveMind-Debug.exe) is built every run and
-uploaded as an Actions artifact only - it prints the real
-traceback when something dies.
-The classic tag path (v*) still works and adds generated
-release notes.
+Distribution (wave #47, the onedir architecture): every
+release carries five assets. HiveMind-Setup.exe installs the
+small app into %LOCALAPPDATA%/Programs/HiveMind with no admin
+rights; the heavy core (HiveMind-Core-windows-x64.zip - torch,
+transformers and friends) is downloaded and SHA-256-verified
+once per machine, not per release. HiveMind-UI-windows-x64.zip
+is the raw app directory, and it includes HiveMind-Debug.exe,
+the console build that prints the real traceback.
+HiveMind-UI-patch.zip holds only the files that changed since
+the previous release, and update_manifest.json lists the
+SHA-256 of every file; installed apps fetch it, verify every
+hash, and refuse to run anything they could not verify.
 
-version: v0.1.3
+version: v0.1.4
