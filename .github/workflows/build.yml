@@ -72,37 +72,25 @@ jobs:
       - name: Fetch the previous UI bundle (for the patch diff)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
+        shell: bash
         run: |
           # Best-effort by definition: a missing previous bundle
-          # only means the patch will be full. Diagnostics go to
-          # the annotations; the build must never die here.
-          try {
-            New-Item -ItemType Directory -Force -Path prev | Out-Null
-            $tag = gh release list --limit 1 --json tagName --jq ".[0].tagName"
-            if (-not $tag) {
-              Write-Output "no previous release - the patch will be full"
-            } else {
-              gh release download $tag --pattern "HiveMind-UI-*.zip" --dir prev --clobber
-              $code = $LASTEXITCODE
-              $zips = @(Get-ChildItem prev -Filter *.zip)
-              if ($code -eq 0 -and $zips.Count -gt 0) {
-                $zips | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
-                Write-Output "previous UI bundle: prev/prev-ui.zip"
-              } else {
-                Write-Output "no previous UI bundle - the patch will be full"
-              }
-            }
-          } catch {
-            $msg = $_ | Out-String
-            Write-Output "fetch diagnostic: $msg"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### fetch diagnostic"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $msg
-            $flat = ($msg -replace "[\r\n]+", " ").Trim()
-            $flat = $flat -replace "%", "%25"
-            echo "::error title=fetchdiag::$flat"
-            Write-Output "no previous UI bundle - the patch will be full"
-          }
+          # only means the patch will be full. Every failure is
+          # absorbed; the build must never die here.
+          echo "gh path: $(command -v gh || echo missing)"
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          if [ -z "$tag" ]; then
+            echo "no previous release - the patch will be full"
+            exit 0
+          fi
+          gh release download "$tag" --pattern "HiveMind-UI-*.zip" --dir prev --clobber > /dev/null 2>&1 || true
+          first_zip=$(ls prev/*.zip 2>/dev/null | head -1)
+          if [ -n "$first_zip" ]; then
+            mv "$first_zip" prev/prev-ui.zip
+            echo "previous UI bundle: prev/prev-ui.zip"
+          else
+            echo "no previous UI bundle - the patch will be full"
+          fi
 
       - name: Generate the update manifest and the UI patch
         run: python installer/make_manifest.py --ui-dir dist/HiveMind-UI --core-zip HiveMind-Core-windows-x64.zip --version ${{ steps.version.outputs.version }} --prev-ui-zip prev/prev-ui.zip --out-dir .
