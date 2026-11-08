@@ -75,22 +75,26 @@ jobs:
         shell: bash
         run: |
           # Best-effort by definition: a missing previous bundle
-          # only means the patch will be full. Every failure is
-          # absorbed; the build must never die here.
+          # only means the patch will be full. gh exits 1 when no
+          # asset matches, and the shell templates propagate the
+          # last native exit code - so absorb everything and end
+          # with an explicit exit 0.
+          set +e
           echo "gh path: $(command -v gh || echo missing)"
-          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null)
           if [ -z "$tag" ]; then
             echo "no previous release - the patch will be full"
             exit 0
           fi
-          gh release download "$tag" --pattern "HiveMind-UI-*.zip" --dir prev --clobber > /dev/null 2>&1 || true
-          first_zip=$(ls prev/*.zip 2>/dev/null | head -1)
+          gh release download "$tag" --pattern "HiveMind-UI-*.zip" --dir prev --clobber > /dev/null 2>&1
+          first_zip=$(find prev -maxdepth 1 -name '*.zip' 2>/dev/null | head -1)
           if [ -n "$first_zip" ]; then
             mv "$first_zip" prev/prev-ui.zip
             echo "previous UI bundle: prev/prev-ui.zip"
           else
             echo "no previous UI bundle - the patch will be full"
           fi
+          exit 0
 
       - name: Generate the update manifest and the UI patch
         run: python installer/make_manifest.py --ui-dir dist/HiveMind-UI --core-zip HiveMind-Core-windows-x64.zip --version ${{ steps.version.outputs.version }} --prev-ui-zip prev/prev-ui.zip --out-dir .
