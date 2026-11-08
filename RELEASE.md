@@ -19,4 +19,4 @@ the previous release, and update_manifest.json lists the
 SHA-256 of every file; installed apps fetch it, verify every
 hash, and refuse to run anything they could not verify.
 
-version: v0.1.6
+version: v0.1.7

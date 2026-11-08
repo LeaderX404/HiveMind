@@ -74,22 +74,34 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          # gh exits 0 even when no asset matches the pattern:
-          # never trust the exit code - count the files instead.
-          New-Item -ItemType Directory -Force -Path prev | Out-Null
-          $tag = gh release list --limit 1 --json tagName --jq ".[0].tagName"
-          if (-not $tag) {
-            Write-Output "no previous release - the patch will be full"
-          } else {
-            gh release download $tag --pattern "HiveMind-UI-*.zip" --dir prev --clobber
-            $code = $LASTEXITCODE
-            $zips = @(Get-ChildItem prev -Filter *.zip)
-            if ($code -eq 0 -and $zips.Count -gt 0) {
-              $zips | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
-              Write-Output "previous UI bundle: prev/prev-ui.zip"
+          # Best-effort by definition: a missing previous bundle
+          # only means the patch will be full. Diagnostics go to
+          # the annotations; the build must never die here.
+          try {
+            New-Item -ItemType Directory -Force -Path prev | Out-Null
+            $tag = gh release list --limit 1 --json tagName --jq ".[0].tagName"
+            if (-not $tag) {
+              Write-Output "no previous release - the patch will be full"
             } else {
-              Write-Output "no previous UI bundle - the patch will be full"
+              gh release download $tag --pattern "HiveMind-UI-*.zip" --dir prev --clobber
+              $code = $LASTEXITCODE
+              $zips = @(Get-ChildItem prev -Filter *.zip)
+              if ($code -eq 0 -and $zips.Count -gt 0) {
+                $zips | Select-Object -First 1 | Rename-Item -NewName "prev-ui.zip"
+                Write-Output "previous UI bundle: prev/prev-ui.zip"
+              } else {
+                Write-Output "no previous UI bundle - the patch will be full"
+              }
             }
+          } catch {
+            $msg = $_ | Out-String
+            Write-Output "fetch diagnostic: $msg"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### fetch diagnostic"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $msg
+            $flat = ($msg -replace "[\r\n]+", " ").Trim()
+            $flat = $flat -replace "%", "%25"
+            echo "::error title=fetchdiag::$flat"
+            Write-Output "no previous UI bundle - the patch will be full"
           }
 
       - name: Generate the update manifest and the UI patch
