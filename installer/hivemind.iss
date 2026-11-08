@@ -1,14 +1,14 @@
-; HiveMind installer (issues #43, #44, wave #47).
+; HiveMind installer (issues #43, #44, waves #47/#49).
 ;
-; Installs the ONEDIR app: the app tree - both executables
-; plus _internal - goes to {app}\app, and the heavy core
-; bundle is downloaded ONCE, verified with SHA-256 before
-; extraction, into {app}\core. No admin rights anywhere.
-; CI compiles this script with /DMyAppVersion, /DCoreUrl and
-; /DCoreSha256 so every release verifies exactly the archive
-; it published.
+; Installs the NATIVE app: HiveMind.exe (Rust/egui, wave #49),
+; the python bridge and the engine sources go to {app}\app,
+; and the heavy core bundle is downloaded ONCE, verified with
+; SHA-256 before extraction, into {app}\core. No admin rights
+; anywhere. CI compiles this script with /DMyAppVersion,
+; /DCoreUrl and /DCoreSha256 so every release verifies
+; exactly the archive it published.
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.9"
+#define MyAppVersion "0.2.0"
 #endif
 #ifndef CoreUrl
 #define CoreUrl ""
@@ -34,8 +34,9 @@ OutputDir=Output
 OutputBaseFilename=HiveMind-Setup
 
 [Files]
-; The onedir app tree: both executables plus _internal
-; (wave #47). Source: dist/HiveMind-UI built by CI.
+; The native app tree (wave #49): the Rust exe plus
+; the python bridge and the engine sources as data.
+; Source: dist/HiveMind-UI staged by CI.
 Source: "..\dist\HiveMind-UI\*"; DestDir: "{app}\app";     Flags: recursesubdirs ignoreversion
 Source: "fetch_core.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
@@ -44,7 +45,6 @@ Name: "{app}\core"
 
 [Icons]
 Name: "{group}\HiveMind"; Filename: "{app}\app\HiveMind.exe"
-Name: "{group}\HiveMind Debug Console"; Filename: "{app}\app\HiveMind-Debug.exe"
 Name: "{commondesktop}\HiveMind"; Filename: "{app}\app\HiveMind.exe";     Tasks: desktopicon
 
 [Tasks]

@@ -1,0 +1,32 @@
+# HiveMind native UI (wave #49): a real desktop window
+# drawn by egui - no browser, no HTML, no CSS, no JS.
+#
+# Size covenant: the exe must stay under 20 MB (the wave
+# #49 gate, enforced in CI). glow renders via OpenGL and
+# ureq is a small blocking HTTP client - no async runtime.
+[package]
+name = "hivemind-ui"
+version = "0.2.0"
+edition = "2021"
+description = "HiveMind native desktop UI (egui, no browser)"
+license = "MIT"
+
+[[bin]]
+name = "HiveMind"
+path = "src/main.rs"
+
+[dependencies]
+# 0.29 keeps the glow backend and the Result-returning
+# app creator; newer eframe defaults to the heavier wgpu.
+eframe = "0.29"
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+
+[profile.release]
+# Small and lean: every byte re-ships inside every delta
+# patch, so size is a covenant, not a preference.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

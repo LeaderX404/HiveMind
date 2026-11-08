@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build the onedir app and the core bundle
+    name: Build the native UI and the core bundle
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -24,33 +24,57 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
-          pip install streamlit pyinstaller pystray Pillow
+      - name: Set up Rust
+        # Wave #49: the Streamlit/PyInstaller stack is retired;
+        # the UI is a native Rust binary drawn by egui - no
+        # browser, no HTML, no CSS, no JS.
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Generate protobuf files
-        run: |
-          python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
-
-      - name: Build the onedir app
-        # Deterministic patches (wave #48): SOURCE_DATE_EPOCH is the
-        # reproducible-builds standard for pinning embedded timestamps.
-        # The normalize step below enforces the same epoch by hand, so
-        # identical sources must produce byte-identical exes and a
-        # UI-only wave ships a UI-only patch (gate: <= 20 MB).
+      - name: Build the native UI
+        working-directory: hivemind-ui
         env:
-          SOURCE_DATE_EPOCH: "946684800"
-        run: pyinstaller build.spec --noconfirm
+          CARGO_TERM_COLOR: never
+        run: cargo build --release
+
+      - name: Stage the app directory
+        # Wave #47 pattern, kept: the exe stays stable while the
+        # python bridge and the engine sources ship as plain
+        # data, so delta patches stay small - the exe just is
+        # no longer python.
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/HiveMind-UI | Out-Null
+          Copy-Item hivemind-ui/target/release/HiveMind.exe dist/HiveMind-UI/
+          Copy-Item hivemind_bridge.py dist/HiveMind-UI/
+          Copy-Item hivemind dist/HiveMind-UI/ -Recurse
+          Copy-Item config dist/HiveMind-UI/ -Recurse
+
+      - name: Enforce the size gate (the exe stays under 20 MB)
+        # The wave #49 covenant, enforced by the machine: a
+        # native UI that outgrows the gate is a regression.
+        shell: pwsh
+        run: |
+          $size = (Get-Item dist/HiveMind-UI/HiveMind.exe).Length
+          $mb = [math]::Round($size / 1MB, 1)
+          echo "HiveMind.exe is $mb MB"
+          if ($size -gt 20MB) {
+            echo "size gate violated: $mb MB > 20 MB"
+            exit 1
+          }
+
+      - name: Selftest the binary (the UI-to-engine path)
+        # Headless: spawn the python bridge (mock mode - the CI
+        # runner has no torch), list models, run one chat
+        # round-trip over the exact HTTP path the window uses.
+        shell: pwsh
+        run: ./dist/HiveMind-UI/HiveMind.exe --selftest
 
       - name: Normalize the build and bundle the app directory
-        # installer/normalize_build.py pins every remaining source of
-        # build-to-build noise: PE TimeDateStamp fields in exe/dll/pyd,
-        # the mtime word in timestamp-based .pyc headers, file mtimes,
-        # and the UI zip entry metadata (fixed dates, sorted order) -
-        # so the patch gate can hold release after release.
+        # installer/normalize_build.py pins the remaining
+        # build-to-build noise: PE TimeDateStamp fields, file
+        # mtimes and the UI zip entry metadata (fixed dates,
+        # sorted order) - so the patch gate holds release
+        # after release.
         env:
           SOURCE_DATE_EPOCH: "946684800"
         run: python installer/normalize_build.py --ui-dir dist/HiveMind-UI --epoch 946684800 --zip HiveMind-UI-windows-x64.zip
@@ -117,7 +141,7 @@ jobs:
         shell: pwsh
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} /DCoreUrl=https://github.com/LeaderX404/HiveMind/releases/download/v${{ steps.version.outputs.version }}/HiveMind-Core-windows-x64.zip /DCoreSha256=${{ steps.corehash.outputs.sha256 }} installer\hivemind.iss'
 
-      - name: Upload the app bundle (includes HiveMind-Debug.exe)
+      - name: Upload the app bundle
         uses: actions/upload-artifact@v4
         with:
           name: HiveMind-UI-windows-x64
@@ -208,7 +232,7 @@ jobs:
             exit 1
           fi
           echo "publishing $new_version"
-          gh release create "$new_version" --target ${{ github.sha }} --title "HiveMind $new_version" --notes "Onedir architecture (wave #47): run HiveMind-Setup.exe - the heavy core (torch, transformers) downloads once on first run. Existing installs update via SHA-256-verified delta patches."
+          gh release create "$new_version" --target ${{ github.sha }} --title "HiveMind $new_version" --notes "Native UI architecture (wave #49): HiveMind.exe is a native egui desktop app - no browser, no Streamlit. The Python engine ships as code-as-data; the heavy core (torch, transformers) downloads once on first run. Existing installs update via SHA-256-verified delta patches."
           gh release upload "$new_version" publish/HiveMind-Setup.exe publish/HiveMind-UI-windows-x64.zip publish/HiveMind-Core-windows-x64.zip publish/HiveMind-UI-patch.zip publish/update_manifest.json
 
   release-windows:
@@ -228,25 +252,57 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install "torch>=2.6.0,<3.0" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
-          pip install streamlit pyinstaller pystray Pillow
+      - name: Set up Rust
+        # Wave #49: the Streamlit/PyInstaller stack is retired;
+        # the UI is a native Rust binary drawn by egui - no
+        # browser, no HTML, no CSS, no JS.
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Generate protobuf files
-        run: |
-          python -m grpc_tools.protoc -I hivemind/net/proto --python_out=hivemind/net/proto --grpc_python_out=hivemind/net/proto hivemind/net/proto/inference.proto
-
-      - name: Build the onedir app
-        # Deterministic patches (wave #48): same rationale as the
-        # build job - SOURCE_DATE_EPOCH plus the normalize step.
+      - name: Build the native UI
+        working-directory: hivemind-ui
         env:
-          SOURCE_DATE_EPOCH: "946684800"
-        run: pyinstaller build.spec --noconfirm
+          CARGO_TERM_COLOR: never
+        run: cargo build --release
+
+      - name: Stage the app directory
+        # Wave #47 pattern, kept: the exe stays stable while the
+        # python bridge and the engine sources ship as plain
+        # data, so delta patches stay small - the exe just is
+        # no longer python.
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/HiveMind-UI | Out-Null
+          Copy-Item hivemind-ui/target/release/HiveMind.exe dist/HiveMind-UI/
+          Copy-Item hivemind_bridge.py dist/HiveMind-UI/
+          Copy-Item hivemind dist/HiveMind-UI/ -Recurse
+          Copy-Item config dist/HiveMind-UI/ -Recurse
+
+      - name: Enforce the size gate (the exe stays under 20 MB)
+        # The wave #49 covenant, enforced by the machine: a
+        # native UI that outgrows the gate is a regression.
+        shell: pwsh
+        run: |
+          $size = (Get-Item dist/HiveMind-UI/HiveMind.exe).Length
+          $mb = [math]::Round($size / 1MB, 1)
+          echo "HiveMind.exe is $mb MB"
+          if ($size -gt 20MB) {
+            echo "size gate violated: $mb MB > 20 MB"
+            exit 1
+          }
+
+      - name: Selftest the binary (the UI-to-engine path)
+        # Headless: spawn the python bridge (mock mode - the CI
+        # runner has no torch), list models, run one chat
+        # round-trip over the exact HTTP path the window uses.
+        shell: pwsh
+        run: ./dist/HiveMind-UI/HiveMind.exe --selftest
 
       - name: Normalize the build and bundle the app directory
+        # installer/normalize_build.py pins the remaining
+        # build-to-build noise: PE TimeDateStamp fields, file
+        # mtimes and the UI zip entry metadata (fixed dates,
+        # sorted order) - so the patch gate holds release
+        # after release.
         env:
           SOURCE_DATE_EPOCH: "946684800"
         run: python installer/normalize_build.py --ui-dir dist/HiveMind-UI --epoch 946684800 --zip HiveMind-UI-windows-x64.zip
