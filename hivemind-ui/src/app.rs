@@ -1,7 +1,8 @@
-//! The chat window (wave #49): message list, model picker
-//! and input box - all drawn immediately by egui. No HTML,
-//! no CSS, no browser; when the engine is missing the
-//! replies are tagged mock, never faked as real.
+//! The chat window (wave #49, port protocol wave #50):
+//! message list, model picker and input box - all drawn
+//! immediately by egui. No HTML, no CSS, no browser; when
+//! the engine is missing the replies are tagged mock, never
+//! faked as real.
 
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
@@ -17,6 +18,7 @@ pub struct HiveMindApp {
     selected_model: usize,
     status: String,
     engine_ready: bool,
+    bridge_port: u16,
     busy: bool,
     rx: Receiver<EngineEvent>,
     tx: Sender<EngineEvent>,
@@ -39,6 +41,7 @@ impl HiveMindApp {
             selected_model: 0,
             status: "discovering the engine...".to_string(),
             engine_ready: false,
+            bridge_port: engine::DEFAULT_PORT,
             busy: false,
             rx,
             tx,
@@ -51,6 +54,7 @@ impl HiveMindApp {
         loop {
             match self.rx.try_recv() {
                 Ok(EngineEvent::Status(status)) => self.status = status,
+                Ok(EngineEvent::Port(port)) => self.bridge_port = port,
                 Ok(EngineEvent::Ready(ready)) => self.engine_ready = ready,
                 Ok(EngineEvent::Models(models)) => {
                     self.models = models;
@@ -102,7 +106,7 @@ impl HiveMindApp {
         let tx = std::sync::mpsc::Sender::clone(&self.tx);
         engine::spawn_chat(
             tx,
-            engine::DEFAULT_PORT,
+            self.bridge_port,
             self.engine_ready,
             prompt,
             model,
@@ -140,7 +144,7 @@ impl eframe::App for HiveMindApp {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                ui.small("wave #49 - native egui UI");
+                ui.small("wave #50 - native egui UI");
                 ui.small("no browser, no HTML, no CSS");
             });
         });

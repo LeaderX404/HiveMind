@@ -1,14 +1,19 @@
-//! The engine bridge (wave #49): discover or spawn the
-//! python bridge process and speak JSON over localhost
-//! HTTP. One blocking worker thread per request - no async
-//! runtime keeps the exe under the 20 MB gate. Every mock
-//! reply says it is mock.
+//! The engine bridge (wave #49, port protocol wave #50):
+//! discover or spawn the python bridge process and speak
+//! JSON over localhost HTTP. One blocking worker thread per
+//! request - no async runtime keeps the exe under the 20 MB
+//! gate. Every mock reply says it is mock. No fixed port is
+//! trusted: the bridge publishes pid+port to port.txt and
+//! the UI follows that file.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 pub const DEFAULT_PORT: u16 = 7860;
+const PORT_FILE: &str = "port.txt";
+const DISCOVER_TRIES: u32 = 80;
+const DISCOVER_SLEEP_MS: u64 = 250;
 
 /// Who said a chat line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +33,7 @@ pub struct ChatMessage {
 /// Events background workers send to the UI thread.
 pub enum EngineEvent {
     Status(String),
+    Port(u16),
     Ready(bool),
     Models(Vec<String>),
     BridgeUp(BridgeHandle),
@@ -95,6 +101,53 @@ fn bridge_script() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Where port.txt lives: the same search order as
+/// bridge_script() - beside the exe, else the working
+/// directory. The bridge writes the file beside itself,
+/// which is that same folder in both layouts.
+fn port_file_path() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside = dir.join(PORT_FILE);
+            if beside.is_file() {
+                return Some(beside);
+            }
+        }
+    }
+    let local = std::path::PathBuf::from(PORT_FILE);
+    if local.is_file() {
+        return Some(local);
+    }
+    None
+}
+
+/// Parse the pid=N / port=M pairs the bridge publishes.
+/// Anything malformed means: treat the file as absent.
+fn parse_port_file(text: &str) -> Option<(u32, u16)> {
+    let mut pid: Option<u32> = None;
+    let mut port: Option<u16> = None;
+    for line in text.lines() {
+        let mut parts = line.splitn(2, '=');
+        let key = parts.next().unwrap_or("").trim();
+        if let Some(value) = parts.next().map(str::trim) {
+            if key == "pid" {
+                pid = value.parse::<u32>().ok();
+            } else if key == "port" {
+                port = value.parse::<u16>().ok();
+            }
+        }
+    }
+    Some((pid?, port?))
+}
+
+/// The published pid+port pair, if a parseable port file
+/// exists right now.
+fn read_port_file() -> Option<(u32, u16)> {
+    let path = port_file_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    parse_port_file(&text)
+}
+
 fn agent(timeout_secs: u64) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(timeout_secs))
@@ -159,20 +212,26 @@ pub fn mock_reply(prompt: &str, model: &str) -> String {
     )
 }
 
-/// Background discovery: use a bridge that is already
-/// listening, else spawn one, else fall back to offline
-/// mock mode.
+/// Background discovery: reuse a bridge that is already
+/// listening on the default port, else spawn one and follow
+/// the port.txt protocol, else fall back to offline mock.
 pub fn discover(tx: Sender<EngineEvent>) {
     std::thread::spawn(move || {
-        let port = DEFAULT_PORT;
-        if let Some(models) = fetch_models(port) {
+        // Compat: a bridge may already be up - started by
+        // hand, or an older build without a port file.
+        if let Some(models) = fetch_models(DEFAULT_PORT) {
             let _ = tx.send(EngineEvent::Status(
                 "engine: bridge detected".to_string(),
             ));
+            let _ = tx.send(EngineEvent::Port(DEFAULT_PORT));
             let _ = tx.send(EngineEvent::Ready(true));
             let _ = tx.send(EngineEvent::Models(models));
             return;
         }
+        // A stale port.txt from a dead run is identified by
+        // its pid: only a pid we have NOT seen before counts
+        // as the bridge we just spawned.
+        let baseline = read_port_file();
         let mut handle = match BridgeHandle::spawn() {
             Some(handle) => handle,
             None => {
@@ -186,16 +245,26 @@ pub fn discover(tx: Sender<EngineEvent>) {
                 return;
             }
         };
-        for _ in 0..40 {
-            std::thread::sleep(Duration::from_millis(500));
-            if let Some(models) = fetch_models(port) {
-                let _ = tx.send(EngineEvent::Status(
-                    "engine: bridge up (python)".to_string(),
-                ));
-                let _ = tx.send(EngineEvent::Ready(true));
-                let _ = tx.send(EngineEvent::Models(models));
-                let _ = tx.send(EngineEvent::BridgeUp(handle));
-                return;
+        for _ in 0..DISCOVER_TRIES {
+            std::thread::sleep(Duration::from_millis(DISCOVER_SLEEP_MS));
+            if let Some((pid, port)) = read_port_file() {
+                let fresh = match baseline {
+                    Some((old_pid, _)) => pid != old_pid,
+                    None => true,
+                };
+                if !fresh {
+                    continue;
+                }
+                if let Some(models) = fetch_models(port) {
+                    let _ = tx.send(EngineEvent::Status(
+                        "engine: bridge up (python)".to_string(),
+                    ));
+                    let _ = tx.send(EngineEvent::Port(port));
+                    let _ = tx.send(EngineEvent::Ready(true));
+                    let _ = tx.send(EngineEvent::Models(models));
+                    let _ = tx.send(EngineEvent::BridgeUp(handle));
+                    return;
+                }
             }
         }
         handle.kill();
@@ -229,7 +298,8 @@ pub fn spawn_chat(
 }
 
 /// Headless selftest (CI): the mock must work, and when a
-/// python is present the full HTTP path must answer.
+/// python is present the full port-file + HTTP path must
+/// answer.
 pub fn selftest() -> bool {
     let mock = mock_reply("hello", "selftest");
     if mock.is_empty() {
@@ -237,6 +307,7 @@ pub fn selftest() -> bool {
         return false;
     }
     println!("selftest: mock generation ok");
+    let baseline = read_port_file();
     let mut handle = match BridgeHandle::spawn() {
         Some(handle) => handle,
         None => {
@@ -244,22 +315,34 @@ pub fn selftest() -> bool {
             return true;
         }
     };
-    for _ in 0..40 {
-        if let Some(models) = fetch_models(DEFAULT_PORT) {
-            let model = models
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "mock-echo".to_string());
-            let (text, _mock, error) = chat(DEFAULT_PORT, "self test", &model);
-            handle.kill();
-            if !error && !text.is_empty() {
-                println!("selftest: bridge chat ok: {}", text);
-                return true;
+    for _ in 0..DISCOVER_TRIES {
+        if let Some((pid, port)) = read_port_file() {
+            let fresh = match baseline {
+                Some((old_pid, _)) => pid != old_pid,
+                None => true,
+            };
+            if !fresh {
+                continue;
             }
-            eprintln!("selftest: bridge chat failed: {}", text);
-            return false;
+            if let Some(models) = fetch_models(port) {
+                let model = models
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "mock-echo".to_string());
+                let (text, _mock, error) = chat(port, "self test", &model);
+                handle.kill();
+                if !error && !text.is_empty() {
+                    println!(
+                        "selftest: bridge chat ok on port {}: {}",
+                        port, text
+                    );
+                    return true;
+                }
+                eprintln!("selftest: bridge chat failed: {}", text);
+                return false;
+            }
         }
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(DISCOVER_SLEEP_MS));
     }
     eprintln!("selftest: bridge did not come up");
     handle.kill();

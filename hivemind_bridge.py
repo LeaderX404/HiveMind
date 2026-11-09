@@ -1,4 +1,4 @@
-"""HiveMind engine bridge (wave #49).
+"""HiveMind engine bridge (wave #49, port protocol #50).
 
 The native Rust UI (hivemind-ui/) talks to the Python engine
 through this stdlib-only local HTTP bridge: GET /api/models
@@ -10,12 +10,19 @@ clearly-tagged mock mode when the engine is absent (wave
 #49 gate: the exe must generate text even when it is fake;
 mocks always say they are mocks).
 
-The real-engine path mirrors the retired Streamlit UI
+Wave #50 port protocol: no fixed port is trusted. The
+bridge binds the first free port at or above the preferred
+one and writes "pid=<pid>\nport=<port>" to port.txt beside
+itself (the app folder); the UI reads that file instead of
+guessing. A busy port is skipped, never fatal.
+
+The real-engine path mirrors the legacy chat app
 (legacy/streamlit/app.py): scan ~/.hivemind/models, build
 the paged engine from FileBackedPager, generate greedy.
 """
 import argparse
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +30,8 @@ from pathlib import Path
 
 MODELS_DIR = Path.home() / ".hivemind" / "models"
 DEFAULT_PORT = 7860
+PORT_ATTEMPTS = 50
+PORT_FILE = "port.txt"
 CHAT_MAX_NEW_TOKENS = 64
 
 _engines = {}
@@ -48,7 +57,7 @@ def _ensure_core_on_path():
 
 def scan_models():
     """Every subfolder of ~/.hivemind/models that looks like a
-    model - the same rule the retired Streamlit app used."""
+    model - the same rule the legacy chat app used."""
     models = []
     if MODELS_DIR.exists():
         for entry in sorted(MODELS_DIR.iterdir()):
@@ -94,6 +103,41 @@ def _get_engine(model_name):
 def mock_reply(prompt, model):
     return ("[mock:%s] no engine behind this bridge yet - "
             "echoing: %s" % (model, prompt))
+
+
+def port_file_path():
+    """port.txt lives beside the bridge - the app folder, the
+    same place the exe looks (wave #50 protocol)."""
+    return Path(__file__).resolve().parent / PORT_FILE
+
+
+def write_port_file(port):
+    """Publish pid+port so the UI can find this bridge
+    without guessing a port."""
+    payload = "pid=%d\nport=%d\n" % (os.getpid(), port)
+    port_file_path().write_text(payload, encoding="ascii")
+
+
+def clear_port_file():
+    """Best effort: a stale file is harmless (the UI matches
+    on pid), but clean up after a polite exit."""
+    try:
+        port_file_path().unlink()
+    except OSError:
+        pass
+
+
+def bind_server(host, preferred_port):
+    """Bind the first free port at or above preferred_port.
+    Returns (server, port) or (None, None) when every port
+    in the range is busy."""
+    for offset in range(PORT_ATTEMPTS):
+        port = preferred_port + offset
+        try:
+            return ThreadingHTTPServer((host, port), Handler), port
+        except OSError:
+            continue
+    return None, None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -157,17 +201,28 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="HiveMind engine bridge (wave #49)")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+        description="HiveMind engine bridge")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
+                        help="preferred port; busy ports are "
+                             "skipped automatically")
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print("bridge: listening on %s:%d" % (args.host, args.port),
+    server, port = bind_server(args.host, args.port)
+    if server is None:
+        print("bridge: no free port in [%d, %d] - giving up"
+              % (args.port, args.port + PORT_ATTEMPTS - 1),
+              file=sys.stderr)
+        sys.exit(1)
+    write_port_file(port)
+    print("bridge: listening on %s:%d (pid %d, published to %s)"
+          % (args.host, port, os.getpid(), port_file_path().name),
           flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        clear_port_file()
 
 
 if __name__ == "__main__":
