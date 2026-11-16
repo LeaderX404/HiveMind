@@ -1,9 +1,12 @@
-"""HiveMind engine bridge (wave #49, port protocol #50).
+"""HiveMind engine bridge (wave #49, port protocol #50,
+model manager #51).
 
 The native Rust UI (hivemind-ui/) talks to the Python engine
 through this stdlib-only local HTTP bridge: GET /api/models
-lists local models, POST /api/chat runs generation. Heavy
-imports (torch, transformers, hivemind itself) happen
+lists local models, POST /api/chat runs generation, and
+POST /api/download fetches a catalog model from Hugging
+Face into ~/.hivemind/models. Heavy imports (torch,
+transformers, hivemind itself, huggingface_hub) happen
 lazily, ONLY when a real model is requested, so the bridge
 starts on any machine - and the UI keeps working in a
 clearly-tagged mock mode when the engine is absent (wave
@@ -34,8 +37,21 @@ PORT_ATTEMPTS = 50
 PORT_FILE = "port.txt"
 CHAT_MAX_NEW_TOKENS = 64
 
+# Wave #51: what the window may fetch. Names are mirrored
+# in hivemind-ui/src/engine.rs (MODEL_CATALOG); the bridge
+# owns the mapping to Hugging Face repos.
+MODEL_CATALOG = {
+    "Qwen2.5-0.5B-Instruct": "Qwen/Qwen2.5-0.5B-Instruct",
+    "Qwen2.5-1.5B-Instruct": "Qwen/Qwen2.5-1.5B-Instruct",
+}
+
 _engines = {}
 _engines_lock = threading.Lock()
+
+_download_state = {
+    "active": False, "done": False, "model": None, "error": None,
+}
+_download_lock = threading.Lock()
 
 
 def _core_dirs():
@@ -100,6 +116,35 @@ def _get_engine(model_name):
         return _engines[model_name]
 
 
+def _run_download(display_name, repo_id):
+    """Fetch one catalog model into ~/.hivemind/models. Runs
+    on a daemon thread; huggingface_hub ships in the core
+    bundle, so the import stays lazy like everything else
+    heavy. Only the files the engine needs are fetched."""
+    try:
+        from huggingface_hub import snapshot_download
+        target = MODELS_DIR / display_name
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(target),
+            allow_patterns=[
+                "config.json", "generation_config.json",
+                "tokenizer.json", "tokenizer_config.json",
+                "vocab.json", "merges.txt", "*.safetensors",
+            ],
+        )
+        with _download_lock:
+            _download_state.update(active=False, done=True)
+        print("bridge: model %s ready" % display_name,
+              file=sys.stderr, flush=True)
+    except Exception as exc:
+        print("bridge: download failed for %s: %s"
+              % (display_name, exc), file=sys.stderr, flush=True)
+        with _download_lock:
+            _download_state.update(active=False, done=False,
+                                   error=str(exc)[:300])
+
+
 def mock_reply(prompt, model):
     return ("[mock:%s] no engine behind this bridge yet - "
             "echoing: %s" % (model, prompt))
@@ -155,10 +200,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/models":
             models = scan_models() or ["mock-echo"]
             self._send_json(200, {"models": models})
+        elif self.path == "/api/download/status":
+            with _download_lock:
+                self._send_json(200, dict(_download_state))
         else:
             self._send_json(404, {"error": "unknown endpoint"})
 
     def do_POST(self):
+        if self.path == "/api/download":
+            self._handle_download()
+            return
         if self.path != "/api/chat":
             self._send_json(404, {"error": "unknown endpoint"})
             return
@@ -194,6 +245,31 @@ class Handler(BaseHTTPRequestHandler):
                 {"text": mock_reply(prompt, model)
                  + " (engine unavailable - see the bridge console)",
                  "mode": "mock"})
+
+    def _handle_download(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            request = json.loads(self.rfile.read(length).decode("utf-8"))
+        except ValueError:
+            self._send_json(400, {"error": "invalid json"})
+            return
+        name = str(request.get("model", "")).strip()
+        if name not in MODEL_CATALOG:
+            self._send_json(400, {
+                "error": "unknown model - catalog: "
+                         + ", ".join(sorted(MODEL_CATALOG))})
+            return
+        with _download_lock:
+            if _download_state["active"]:
+                self._send_json(409,
+                                {"error": "a download is already running"})
+                return
+            _download_state.update(active=True, model=name,
+                                   error=None, done=False)
+        threading.Thread(target=_run_download,
+                         args=(name, MODEL_CATALOG[name]),
+                         daemon=True).start()
+        self._send_json(202, {"started": True, "model": name})
 
     def log_message(self, *args):
         pass  # quiet by design: the UI shows the status

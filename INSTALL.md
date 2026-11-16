@@ -54,6 +54,18 @@ localhost HTTP - nothing leaves your machine. A stale
 port.txt from a dead run is ignored: the pid inside it
 tells the UI it is not the bridge it just started.
 
+## Get a real model (from inside the window)
+
+The left panel lists what is installed in
+~/.hivemind/models. When nothing is there it offers
+"Download Qwen 0.5B" - one click fetches Qwen2.5-0.5B-
+Instruct (about 1 GB) from Hugging Face through the
+bridge, into ~/.hivemind/models. No account or token is
+needed for these public models. The status line reports
+progress; when it lands, pick the model and chat -
+replies then come from the real paged engine, not the
+mock. "Download model" offers 0.5B and 1.5B.
+
 ## Troubleshooting
 
 - Window says "offline: no python - mock mode": Python is

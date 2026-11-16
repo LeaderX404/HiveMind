@@ -30,6 +30,22 @@ jobs:
         # browser, no HTML, no CSS, no JS.
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Fetch the Arabic font (pinned)
+        # Wave #51: Arabic text must render as letters, not
+        # boxes. The font is fetched at build time from a
+        # commit-pinned URL (no drift) and embedded into the
+        # exe by include_bytes!. Size sanity: 100 KB - 5 MB.
+        working-directory: hivemind-ui
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path assets | Out-Null
+          $dest = "assets/NotoNaskhArabic-Regular.ttf"
+          if (-not (Test-Path $dest)) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/notofonts/notofonts.github.io/cb61ee5541f7c90cd00720f3eadf898f1ebf9c3c/fonts/NotoNaskhArabic/hinted/ttf/NotoNaskhArabic-Regular.ttf" -OutFile $dest
+          }
+          $size = (Get-Item $dest).Length
+          echo "font bytes: $size"
+          if ($size -lt 100KB -or $size -gt 5MB) { throw "font size sanity failed: $size" }
       - name: Build the native UI
         working-directory: hivemind-ui
         env:
@@ -258,6 +274,22 @@ jobs:
         # browser, no HTML, no CSS, no JS.
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Fetch the Arabic font (pinned)
+        # Wave #51: Arabic text must render as letters, not
+        # boxes. The font is fetched at build time from a
+        # commit-pinned URL (no drift) and embedded into the
+        # exe by include_bytes!. Size sanity: 100 KB - 5 MB.
+        working-directory: hivemind-ui
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path assets | Out-Null
+          $dest = "assets/NotoNaskhArabic-Regular.ttf"
+          if (-not (Test-Path $dest)) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/notofonts/notofonts.github.io/cb61ee5541f7c90cd00720f3eadf898f1ebf9c3c/fonts/NotoNaskhArabic/hinted/ttf/NotoNaskhArabic-Regular.ttf" -OutFile $dest
+          }
+          $size = (Get-Item $dest).Length
+          echo "font bytes: $size"
+          if ($size -lt 100KB -or $size -gt 5MB) { throw "font size sanity failed: $size" }
       - name: Build the native UI
         working-directory: hivemind-ui
         env:

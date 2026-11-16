@@ -34,10 +34,40 @@ fn main() {
     let result = eframe::run_native(
         "HiveMind",
         options,
-        Box::new(|_cc| Ok(Box::new(app::HiveMindApp::new()))),
+        Box::new(|cc| {
+            install_fonts(&cc.egui_ctx);
+            Ok(Box::new(app::HiveMindApp::new()))
+        }),
     );
     if let Err(err) = result {
         eprintln!("ui error: {}", err);
         exit(1);
     }
+}
+
+/// Wave #51: Arabic must render as letters, not boxes. The
+/// Noto Naskh Arabic font is fetched at build time from a
+/// commit-pinned URL (see assets/fetch-font.ps1) and embedded
+/// into the exe here. It is APPENDED to every family, so
+/// Latin text keeps the default fonts and Arabic falls back
+/// to Noto.
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let arabic = egui::FontData::from_static(include_bytes!(
+        "../assets/NotoNaskhArabic-Regular.ttf"
+    ));
+    fonts
+        .font_data
+        .insert("noto_naskh_arabic".to_owned(), arabic.into());
+    for family in [
+        egui::FontFamily::Proportional,
+        egui::FontFamily::Monospace,
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("noto_naskh_arabic".to_owned());
+    }
+    ctx.set_fonts(fonts);
 }

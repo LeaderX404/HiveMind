@@ -1,5 +1,6 @@
-//! The chat window (wave #49, port protocol wave #50):
-//! message list, model picker and input box - all drawn
+//! The chat window (wave #49, port protocol wave #50,
+//! model manager wave #51): message list, model picker with
+//! in-window downloads, and input box - all drawn
 //! immediately by egui. No HTML, no CSS, no browser; when
 //! the engine is missing the replies are tagged mock, never
 //! faked as real.
@@ -20,6 +21,7 @@ pub struct HiveMindApp {
     engine_ready: bool,
     bridge_port: u16,
     busy: bool,
+    downloading: Option<String>,
     rx: Receiver<EngineEvent>,
     tx: Sender<EngineEvent>,
     bridge: Option<BridgeHandle>,
@@ -32,7 +34,11 @@ impl HiveMindApp {
         Self {
             messages: vec![ChatMessage {
                 speaker: Speaker::Assistant,
-                text: "HiveMind native UI online. Discovering the engine..."
+                // Wave #51: the Arabic line doubles as a live
+                // font check - boxes here mean the embedded
+                // Noto Naskh Arabic font did not load.
+                text: "HiveMind native UI online. Discovering the engine...\n\
+                       مرحبًا! إذا قرأت هذا السطر بوضوح فالخط العربي يعمل."
                     .to_string(),
                 mock: false,
             }],
@@ -43,6 +49,7 @@ impl HiveMindApp {
             engine_ready: false,
             bridge_port: engine::DEFAULT_PORT,
             busy: false,
+            downloading: None,
             rx,
             tx,
             bridge: None,
@@ -61,6 +68,18 @@ impl HiveMindApp {
                     self.selected_model = 0;
                 }
                 Ok(EngineEvent::BridgeUp(handle)) => self.bridge = Some(handle),
+                Ok(EngineEvent::DownloadState { active, done, model, error }) => {
+                    if let Some(err) = error {
+                        self.downloading = None;
+                        self.status = format!("download failed: {}", err);
+                    } else if done {
+                        self.downloading = None;
+                        self.status = format!("{} ready - pick it on the left", model);
+                    } else if active {
+                        self.downloading = Some(model.clone());
+                        self.status = format!("downloading {}...", model);
+                    }
+                }
                 Ok(EngineEvent::Reply { text, mock, error }) => {
                     self.busy = false;
                     if error {
@@ -116,6 +135,37 @@ impl HiveMindApp {
     fn send_enabled(&self) -> bool {
         !self.busy && !self.models.is_empty()
     }
+
+    /// Wave #51: fetch a catalog model through the bridge.
+    /// The bridge downloads into ~/.hivemind/models; a
+    /// watcher thread reports progress until it settles.
+    fn start_download(&mut self, name: &str) {
+        if self.downloading.is_some() {
+            return;
+        }
+        match engine::start_download(self.bridge_port, name) {
+            Ok(()) => {
+                self.downloading = Some(name.to_string());
+                self.status = format!("downloading {}...", name);
+                engine::watch_download(
+                    std::sync::mpsc::Sender::clone(&self.tx),
+                    self.bridge_port,
+                );
+            }
+            Err(err) => {
+                self.status = err;
+            }
+        }
+    }
+
+    /// Real models only - mock-echo is the bridge's
+    /// placeholder, not something the user picked.
+    fn real_model_count(&self) -> usize {
+        self.models
+            .iter()
+            .filter(|m| m.as_str() != "mock-echo")
+            .count()
+    }
 }
 
 impl eframe::App for HiveMindApp {
@@ -131,7 +181,7 @@ impl eframe::App for HiveMindApp {
         });
 
         egui::SidePanel::left("model_panel").show(ctx, |ui| {
-            ui.heading("Model");
+            ui.heading("Models");
             if self.models.is_empty() {
                 ui.label("(discovering...)");
             }
@@ -143,8 +193,33 @@ impl eframe::App for HiveMindApp {
                     self.selected_model = index;
                 }
             }
+            // Wave #51: the honest empty state - one click
+            // fetches a real model instead of lecturing the
+            // user about folders.
+            if self.engine_ready
+                && self.real_model_count() == 0
+                && self.downloading.is_none()
+            {
+                ui.add_space(6.0);
+                ui.label("No models found.");
+                if ui.button("Download Qwen 0.5B").clicked() {
+                    self.start_download("Qwen2.5-0.5B-Instruct");
+                }
+            }
+            ui.add_space(6.0);
+            ui.menu_button("Download model", |ui| {
+                for name in engine::MODEL_CATALOG {
+                    if ui.button(*name).clicked() {
+                        self.start_download(name);
+                        ui.close_menu();
+                    }
+                }
+            });
+            if let Some(name) = &self.downloading {
+                ui.small(format!("downloading {}...", name));
+            }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                ui.small("wave #50 - native egui UI");
+                ui.small("wave #51 - native egui UI");
                 ui.small("no browser, no HTML, no CSS");
             });
         });

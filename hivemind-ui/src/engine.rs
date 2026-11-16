@@ -15,6 +15,14 @@ const PORT_FILE: &str = "port.txt";
 const DISCOVER_TRIES: u32 = 80;
 const DISCOVER_SLEEP_MS: u64 = 250;
 
+/// Models the bridge can fetch (wave #51). Mirrored in
+/// hivemind_bridge.py - the bridge maps the name to the
+/// Hugging Face repo.
+pub const MODEL_CATALOG: &[&str] = &[
+    "Qwen2.5-0.5B-Instruct",
+    "Qwen2.5-1.5B-Instruct",
+];
+
 /// Who said a chat line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Speaker {
@@ -37,6 +45,12 @@ pub enum EngineEvent {
     Ready(bool),
     Models(Vec<String>),
     BridgeUp(BridgeHandle),
+    DownloadState {
+        active: bool,
+        done: bool,
+        model: String,
+        error: Option<String>,
+    },
     Reply { text: String, mock: bool, error: bool },
 }
 
@@ -201,6 +215,75 @@ pub fn chat(port: u16, prompt: &str, model: &str) -> (String, bool, bool) {
         },
         Err(err) => (format!("bridge unreachable: {}", err), false, true),
     }
+}
+
+/// Ask the bridge to fetch one catalog model (wave #51).
+/// The download runs on the bridge side; watch_download()
+/// follows it until it settles.
+pub fn start_download(port: u16, model: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "model": model });
+    match agent(30).post(&url(port, "/api/download")).send_json(body) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, resp)) => {
+            let text = resp.into_string().unwrap_or_default();
+            Err(format!("download refused (HTTP {}): {}", code, text))
+        }
+        Err(err) => Err(format!("download request failed: {}", err)),
+    }
+}
+
+/// One snapshot of the bridge-side download state.
+pub struct DownloadState {
+    pub active: bool,
+    pub done: bool,
+    pub model: String,
+    pub error: Option<String>,
+}
+
+pub fn download_status(port: u16) -> Option<DownloadState> {
+    let response = agent(5)
+        .get(&url(port, "/api/download/status"))
+        .call()
+        .ok()?;
+    let value: serde_json::Value = response.into_json().ok()?;
+    Some(DownloadState {
+        active: value.get("active").and_then(|v| v.as_bool())?,
+        done: value.get("done").and_then(|v| v.as_bool())?,
+        model: value
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        error: value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    })
+}
+
+/// Follow a running download until it settles; refresh the
+/// model list when it succeeds.
+pub fn watch_download(tx: Sender<EngineEvent>, port: u16) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(1500));
+        let Some(state) = download_status(port) else {
+            continue;
+        };
+        let _ = tx.send(EngineEvent::DownloadState {
+            active: state.active,
+            done: state.done,
+            model: state.model.clone(),
+            error: state.error.clone(),
+        });
+        if !state.active {
+            if state.done {
+                if let Some(models) = fetch_models(port) {
+                    let _ = tx.send(EngineEvent::Models(models));
+                }
+            }
+            return;
+        }
+    });
 }
 
 /// The built-in offline mock (no python at all): clearly

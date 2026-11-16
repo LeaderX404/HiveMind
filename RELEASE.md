@@ -17,7 +17,12 @@ on PATH (INSTALL.md has the honest list), and without one it
 runs in a clearly-tagged offline mock mode. No fixed port is
 trusted: the bridge binds the first free port, publishes
 pid+port to port.txt in the app folder, and the window
-follows that file. The heavy core
+follows that file. The window speaks Arabic - the UI
+font (Noto Naskh Arabic, pinned) is embedded, so Arabic
+renders as letters, not boxes - and models are managed
+from inside the window: the left panel lists
+~/.hivemind/models and can fetch Qwen 2.5 (0.5B / 1.5B)
+through the bridge. The heavy core
 (HiveMind-Core-windows-x64.zip - torch, transformers and
 friends) is downloaded and SHA-256-verified once per machine,
 not per release. HiveMind-UI-windows-x64.zip is the raw app
@@ -27,4 +32,4 @@ lists the SHA-256 of every file; installed apps fetch it,
 verify every hash, and refuse to run anything they could
 not verify.
 
-version: v0.2.1
+version: v0.2.2
